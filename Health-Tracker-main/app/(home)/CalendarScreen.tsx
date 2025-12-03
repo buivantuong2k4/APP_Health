@@ -17,7 +17,7 @@ import {
 import Sidebar from "../../components/Sidebar";
 
 // --- CẤU HÌNH API ---
-const API_URL = "http://10.0.2.2:5000"; 
+const API_URL = "http://10.0.2.2:8000"; 
 const USER_ID = 1; 
 
 // --- CẤU HÌNH MÀU SẮC ---

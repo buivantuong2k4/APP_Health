@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     "preferences",
     'rest_framework',
     'corsheaders',
+    "AI",
 ]
 
 REST_FRAMEWORK = {

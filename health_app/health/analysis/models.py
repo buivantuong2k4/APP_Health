@@ -1,6 +1,7 @@
 from django.db import models
 from accounts.models import Account  # liên kết với Account
 from datetime import date, datetime, timedelta
+import uuid
 class HealthMetric(models.Model):
     user = models.ForeignKey(Account, on_delete=models.CASCADE, related_name="metrics")
     height_cm = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
@@ -84,6 +85,7 @@ class HealthMetric(models.Model):
         )
         metric.save()
         return metric
+  
            
     
 class WeeklyPlans(models.Model):
@@ -116,56 +118,28 @@ class WeeklyPlans(models.Model):
 
         plan.save()
         return plan
+   
     
-class PlanTracking (models.Model):
+class PlanTracking(models.Model):
     ITEM_TYPE_CHOICES = [
         ('exercise', 'Exercise'),
         ('food', 'Food'),
     ]
     user_id = models.ForeignKey(Account, on_delete=models.CASCADE, related_name="plan_trackings")
-    date  = models.DateField(null=True, blank=True)
-    item_type  = models.CharField(max_length=10, choices=ITEM_TYPE_CHOICES,null=True, blank=True)
-    item_id = models.IntegerField(null=True, blank=True)
+    date = models.DateField(null=True, blank=True)
+    item_type = models.CharField(max_length=10, choices=ITEM_TYPE_CHOICES, null=True, blank=True)
+    
+    # Giữ nguyên item_id là Integer (Lưu ý: món custom sẽ phải lưu là 0 hoặc Null ở đây)
+    item_id = models.IntegerField(null=True, blank=True) 
+    
     is_completed = models.BooleanField(default=False)
-    weekly_plan = models.ForeignKey(WeeklyPlans, on_delete=models.CASCADE, related_name="trackings", null=True, blank=True)
+    weekly_plan = models.ForeignKey('WeeklyPlans', on_delete=models.CASCADE, related_name="trackings", null=True, blank=True)
+    
+    # --- [MỚI THÊM] ---
+    # varchar(50), cho phép NULL, và có Index để tìm kiếm nhanh
+    instance_id = models.CharField(max_length=50, null=True, blank=True, db_index=True) 
+    # ------------------
+    
     created_at = models.DateTimeField(auto_now_add=True)
     
-    @staticmethod
-    def add_plan_tracking (weekly_plan):
-        user = weekly_plan.user_id
-        plan_data  = weekly_plan.plan_data or {}
-        meal_plan = plan_data.get("meal_plan", {})
-        workout_plan = plan_data.get("workout_plan", {})
-        days_offset = {
-        "Monday": 0,
-        "Tuesday": 1,
-        "Wednesday": 2,
-        "Thursday": 3,
-        "Friday": 4,
-        "Saturday": 5,
-        "Sunday": 6,
-    }
-        for day_name in ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]:
-            day_date = weekly_plan.start_date + timedelta(days=days_offset[day_name])
-            
-            if day_name in meal_plan:
-                for meal_type, meal_info in meal_plan[day_name].items():
-                    if meal_type =="total_calories":
-                        continue
-                    PlanTracking.objects.create(
-                        user_id = user,
-                        date = day_date,
-                        item_type = "food",
-                        item_id = meal_info.get("id"),
-                        weekly_plan = weekly_plan
-                    )
-            if day_name in workout_plan:
-                for exercise in workout_plan[day_name].get("exercises", []):
-                    PlanTracking.objects.create(
-                        user_id = user,
-                        date = day_date,
-                        item_type = "exercise",
-                        item_id = exercise.get("id"),
-                        weekly_plan = weekly_plan
-                    )
-            
+   

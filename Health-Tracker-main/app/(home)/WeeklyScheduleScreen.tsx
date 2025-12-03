@@ -20,7 +20,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { colors } from "../../constants/theme";
 
 // --- CẤU HÌNH API ---
-const API_URL = "http://10.0.2.2:5000"; 
+const API_URL = "http://10.0.2.2:8000"; 
 const USER_ID = 1; 
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;

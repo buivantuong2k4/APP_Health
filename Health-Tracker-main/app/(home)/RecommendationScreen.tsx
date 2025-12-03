@@ -18,7 +18,7 @@ import {
 import { colors } from "../../constants/theme";
 
 // --- CẤU HÌNH API ---
-const API_URL = "http://10.0.2.2:5000"; 
+const API_URL = "http://10.0.2.2:8000"; 
 const USER_ID = 1; 
 
 // --- TYPE DEFINITIONS ---
