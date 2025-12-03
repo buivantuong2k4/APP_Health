@@ -2,6 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
+    ActivityIndicator,
     Alert,
     KeyboardAvoidingView,
     Modal,
@@ -18,81 +19,42 @@ import {
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { colors } from "../../constants/theme";
 
+// --- CẤU HÌNH API ---
+const API_URL = "http://10.0.2.2:5000"; 
+const USER_ID = 1; 
+
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
 const DAY_LABELS = { Mon: 'T2', Tue: 'T3', Wed: 'T4', Thu: 'T5', Fri: 'T6', Sat: 'T7', Sun: 'CN' } as const;
+const DAY_MAP_BACKEND = { Monday: 'Mon', Tuesday: 'Tue', Wednesday: 'Wed', Thursday: 'Thu', Friday: 'Fri', Saturday: 'Sat', Sunday: 'Sun' };
 const TARGETS = { caloriesIn: 2000, caloriesOut: 500 };
 
 // --- TYPE DEFINITIONS ---
 type DayKey = typeof DAYS[number];
+
 type ScheduleItem = {
   id: string;
   title: string;
   icon: string;
-  type: string;
-  calories?: number;
+  type: string; // 'meal' | 'workout'
   cal: number;
   time: string;
   description?: string;
   duration?: string;
-  instanceId: string;
+  instanceId: string; // ID duy nhất cho mỗi item trong list (để xóa/sửa không bị trùng)
 };
+
 type WeeklyPlanType = {
-  Mon: ScheduleItem[];
-  Tue: ScheduleItem[];
-  Wed: ScheduleItem[];
-  Thu: ScheduleItem[];
-  Fri: ScheduleItem[];
-  Sat: ScheduleItem[];
-  Sun: ScheduleItem[];
+  [key in DayKey]: ScheduleItem[];
 };
 
 export default function WeeklyScheduleScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
-
- // =================================================================
-// [BE-NOTE] API SPECIFICATION FOR SCHEDULE SCREEN
-// =================================================================
-//
-// 1. GENERATE SCHEDULE (Tạo lịch đề xuất)
-// -----------------------------------------------------------------
-// Endpoint: POST /api/schedule/generate
-// Mô tả: Nhận danh sách món ăn/bài tập, trả về lịch trình 7 ngày.
-// Request Body:
-// {
-//    "startDate": "2023-11-27",
-//    "selectedItems": [{ "id": "...", "type": "meal", ... }]
-// }
-// Response (Success):
-// {
-//    "success": true,
-//    "weekId": "temp_week_123", // ID tạm
-//    "schedule": [ ...Array 7 days... ] -> Map vào state 'scheduleData'
-// }
-//
-// -----------------------------------------------------------------
-// 2. SAVE SCHEDULE (Lưu/Áp dụng lịch trình)
-// -----------------------------------------------------------------
-// Endpoint: POST /api/schedule/save
-// Mô tả: Người dùng chấp nhận lịch trình đề xuất. Lưu vào DB chính thức.
-// Request Body:
-// {
-//    "weekId": "temp_week_123", (ID từ bước generate nếu có)
-//    "startDate": "2023-11-27",
-//    "finalSchedule": [ ...Dữ liệu từ state 'scheduleData'... ]
-// }
-// Response (Success):
-// {
-//    "success": true,
-//    "message": "Schedule applied successfully",
-//    "savedWeekId": "official_week_999" // Backend trả về ID chính thức
-// }
-// =================================================================
   
-  const [inventory, setInventory] = useState<ScheduleItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [inventory, setInventory] = useState<ScheduleItem[]>([]); // Kho để user chọn thêm
 
-  // [BE-NOTE] Đây là State chứa dữ liệu lịch trình 7 ngày.
-  // Dữ liệu từ API trả về (field 'schedule') cần được set vào biến này.
+  // State chứa dữ liệu lịch trình 7 ngày
   const [weeklyPlan, setWeeklyPlan] = useState<WeeklyPlanType>({ Mon: [], Tue: [], Wed: [], Thu: [], Fri: [], Sat: [], Sun: [] });
   const [selectedDay, setSelectedDay] = useState<DayKey>('Mon');
 
@@ -109,26 +71,128 @@ export default function WeeklyScheduleScreen() {
 
   // STATE CHO TIME PICKER
   const [showTimePicker, setShowTimePicker] = useState(false);
-  const [tempDate, setTempDate] = useState(new Date()); // Dùng để lưu tạm giá trị cho Picker
+  const [tempDate, setTempDate] = useState(new Date()); 
 
-  // ... (Phần useEffect load data giữ nguyên) ...
+  // --- 1. LOAD DỮ LIỆU TỪ AI (PARAMS) ---
   useEffect(() => {
-      if (params.data) {
-          const dataString = typeof params.data === 'string' ? params.data : params.data[0];
-          const items = JSON.parse(dataString);
-          setInventory(items);
-          const newPlan = { ...weeklyPlan };
-          newPlan.Mon = items.slice(0, 4).map((item: ScheduleItem, index: number) => ({
-              ...item,
-              instanceId: Math.random().toString(),
-              time: index === 0 ? '07:00' : index === 1 ? '12:00' : index === 2 ? '18:00' : '17:00'
-          })).sort((a: ScheduleItem, b: ScheduleItem) => a.time.localeCompare(b.time));
-          setWeeklyPlan(newPlan);
+      if (params.planData) {
+          try {
+              const dataString = typeof params.planData === 'string' ? params.planData : params.planData[0];
+              const aiData = JSON.parse(dataString); // Dữ liệu từ API /preview
+              
+              // Transform Data từ cấu trúc Backend -> Cấu trúc UI (Mon, Tue...)
+              const transformedPlan: WeeklyPlanType = { Mon: [], Tue: [], Wed: [], Thu: [], Fri: [], Sat: [], Sun: [] };
+              const tempInventory: ScheduleItem[] = [];
+              const addedIds = new Set<string>();
+
+              // Helper để tạo Item chuẩn
+              const createItem = (source: any, type: 'meal' | 'workout', defaultTime: string, icon: string): ScheduleItem => {
+                   // Lưu vào kho Inventory để user dùng lại sau này
+                   if (!addedIds.has(source.id.toString())) {
+                       tempInventory.push({
+                           id: source.id.toString(),
+                           title: source.name,
+                           cal: source.cal || source.calories || 0,
+                           type: type,
+                           icon: icon,
+                           time: defaultTime,
+                           instanceId: `inv_${source.id}`
+                       });
+                       addedIds.add(source.id.toString());
+                   }
+
+                   return {
+                       id: source.id.toString(),
+                       title: source.name,
+                       cal: source.cal || source.calories || 0,
+                       type: type,
+                       icon: icon,
+                       time: source.time || defaultTime, // Nếu Backend chưa có time, dùng default
+                       instanceId: Math.random().toString()
+                   };
+              };
+
+              // Xử lý Meal Plan
+              if (aiData.meal_plan) {
+                  Object.keys(aiData.meal_plan).forEach(dayName => {
+                      const dayKey = DAY_MAP_BACKEND[dayName as keyof typeof DAY_MAP_BACKEND] as DayKey;
+                      if (!dayKey) return;
+
+                      const dayMeals = aiData.meal_plan[dayName];
+                      if (dayMeals.breakfast) transformedPlan[dayKey].push(createItem(dayMeals.breakfast, 'meal', '07:00', '🥣'));
+                      if (dayMeals.lunch) transformedPlan[dayKey].push(createItem(dayMeals.lunch, 'meal', '12:00', '🍚'));
+                      if (dayMeals.dinner) transformedPlan[dayKey].push(createItem(dayMeals.dinner, 'meal', '19:00', '🍲'));
+                  });
+              }
+
+              // Xử lý Workout Plan
+              if (aiData.workout_plan) {
+                   Object.keys(aiData.workout_plan).forEach(dayName => {
+                      const dayKey = DAY_MAP_BACKEND[dayName as keyof typeof DAY_MAP_BACKEND] as DayKey;
+                      if (!dayKey) return;
+                      
+                      const dayWorkouts = aiData.workout_plan[dayName];
+                      if (dayWorkouts.exercises && Array.isArray(dayWorkouts.exercises)) {
+                          dayWorkouts.exercises.forEach((ex: any) => {
+                              transformedPlan[dayKey].push(createItem(ex, 'workout', '17:00', '🏃'));
+                          });
+                      }
+                   });
+              }
+
+              // Sắp xếp theo thời gian
+              Object.keys(transformedPlan).forEach(key => {
+                  transformedPlan[key as DayKey].sort((a, b) => a.time.localeCompare(b.time));
+              });
+
+              setWeeklyPlan(transformedPlan);
+              setInventory(tempInventory);
+
+          } catch (e) {
+              console.error("Lỗi parse data:", e);
+              Alert.alert("Lỗi", "Dữ liệu lịch trình không hợp lệ.");
+          }
       }
-  }, [params.data]);
+  }, [params.planData]);
+
+
+  // --- 2. HÀM LƯU LỊCH (GỌI API) ---
+  const handleSaveToDatabase = async () => {
+      setLoading(true);
+      try {
+          // Chuẩn bị payload để gửi lên Server
+          // Ta gửi nguyên cục state weeklyPlan (JSON) để lưu vào cột plan_data
+          const payload = {
+              user_id: USER_ID,
+              plan_data: weeklyPlan // Lưu y nguyên cấu trúc UI để sau này load lên cho dễ
+          };
+
+          const response = await fetch(`${API_URL}/api/plan/save`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+          });
+
+          const resJson = await response.json();
+          
+          if (resJson.error) {
+              Alert.alert("Lỗi lưu trữ", resJson.error);
+          } else {
+              Alert.alert("Thành công", "Lịch trình của bạn đã được lưu!", [
+                  { text: "OK", onPress: () => router.replace("/(home)/CalendarScreen") } // Về trang chủ
+              ]);
+          }
+
+      } catch (error) {
+          console.error(error);
+          Alert.alert("Lỗi mạng", "Không thể kết nối đến máy chủ.");
+      } finally {
+          setLoading(false);
+      }
+  };
+
 
   // --- HELPER TIME ---
-  // Chuyển string "07:30" -> Date Object
   const stringToDate = (timeString: string) => {
       const [hours, minutes] = timeString.split(':').map(Number);
       const date = new Date();
@@ -137,7 +201,6 @@ export default function WeeklyScheduleScreen() {
       return date;
   };
 
-  // Chuyển Date Object -> string "07:30"
   const dateToString = (date: Date) => {
       const hours = date.getHours().toString().padStart(2, '0');
       const minutes = date.getMinutes().toString().padStart(2, '0');
@@ -156,12 +219,11 @@ export default function WeeklyScheduleScreen() {
   };
 
   const openTimePicker = () => {
-      setTempDate(stringToDate(formTime || '07:00')); // Set giờ hiện tại của form vào picker
+      setTempDate(stringToDate(formTime || '07:00'));
       setShowTimePicker(true);
   };
 
-  // --- ACTIONS (Giữ nguyên logic cũ, chỉ sửa phần mở modal) ---
-
+  // --- ACTIONS ---
   const handleOpenAddPicker = () => setPickerVisible(true);
 
   const handlePickItem = (item: ScheduleItem) => {
@@ -183,40 +245,51 @@ export default function WeeklyScheduleScreen() {
       setEditorVisible(true);
   };
 
-  const handleSave = () => {
-      // ... (Giữ nguyên logic Save & Sort như bài trước) ...
+  const handleSaveItemLocal = () => {
       if (!formTime || !formCal) { Alert.alert("Lỗi", "Nhập đủ thông tin"); return; }
-      const newItem = { ...editingItem, title: formTitle, time: formTime, cal: parseInt(formCal) } as ScheduleItem;
-      let dayList = [...weeklyPlan[selectedDay as DayKey]];
-      if (!isNew && editingItem) dayList = dayList.filter((i: ScheduleItem) => i.instanceId !== editingItem.instanceId);
+      const newItem = { 
+          ...editingItem, 
+          title: formTitle, 
+          time: formTime, 
+          cal: parseInt(formCal) 
+      } as ScheduleItem;
+
+      let dayList = [...weeklyPlan[selectedDay]];
+      
+      if (!isNew && editingItem) {
+          // Nếu là sửa, xóa item cũ đi trước khi thêm mới (để cập nhật sort)
+          dayList = dayList.filter((i) => i.instanceId !== editingItem.instanceId);
+      }
+      
       dayList.push(newItem);
-      dayList.sort((a: ScheduleItem, b: ScheduleItem) => a.time.localeCompare(b.time));
-      setWeeklyPlan({ ...weeklyPlan, [selectedDay as DayKey]: dayList });
+      dayList.sort((a, b) => a.time.localeCompare(b.time));
+      
+      setWeeklyPlan({ ...weeklyPlan, [selectedDay]: dayList });
       setEditorVisible(false);
   };
 
-  const handleDelete = () => {
-      // ... (Giữ nguyên) ...
+  const handleDeleteItemLocal = () => {
       if (isNew || !editingItem) return;
-      const dayList = weeklyPlan[selectedDay as DayKey].filter((i: ScheduleItem) => i.instanceId !== editingItem.instanceId);
-      setWeeklyPlan({ ...weeklyPlan, [selectedDay as DayKey]: dayList });
+      const dayList = weeklyPlan[selectedDay].filter((i) => i.instanceId !== editingItem.instanceId);
+      setWeeklyPlan({ ...weeklyPlan, [selectedDay]: dayList });
       setEditorVisible(false);
   };
 
-  // Calculate Summary (Giữ nguyên)
-  const currentDayItems: ScheduleItem[] = weeklyPlan[selectedDay as DayKey] || [];
-  const realIn = currentDayItems.filter((i: ScheduleItem) => i.type === 'meal').reduce((sum: number, i: ScheduleItem) => sum + Math.abs(i.cal), 0);
-  const realOut = currentDayItems.filter((i: ScheduleItem) => i.type === 'workout').reduce((sum: number, i: ScheduleItem) => sum + Math.abs(i.cal), 0);
+  // Calculate Summary
+  const currentDayItems: ScheduleItem[] = weeklyPlan[selectedDay] || [];
+  const realIn = currentDayItems.filter((i) => i.type === 'meal').reduce((sum, i) => sum + Math.abs(i.cal), 0);
+  const realOut = currentDayItems.filter((i) => i.type === 'workout').reduce((sum, i) => sum + Math.abs(i.cal), 0);
   const netCal = realIn - realOut;
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      {/* ... (Header, DayTabs, SummaryCard, TimelineList giữ nguyên code cũ) ... */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()}><Ionicons name="chevron-back" size={24} /></TouchableOpacity>
+        <TouchableOpacity onPress={() => router.back()}><Ionicons name="chevron-back" size={24} color="#333" /></TouchableOpacity>
         <Text style={styles.headerTitle}>Sắp xếp Lịch trình</Text>
-        <TouchableOpacity onPress={() => router.replace("/(home)/CalendarScreen")}>
-             <Text style={{color: colors.primary, fontWeight: 'bold'}}>Hoàn tất</Text>
+        <TouchableOpacity onPress={handleSaveToDatabase} disabled={loading}>
+             {loading ? <ActivityIndicator size="small" color={colors.primary} /> : (
+                 <Text style={{color: colors.primary, fontWeight: 'bold', fontSize: 16}}>Hoàn tất</Text>
+             )}
         </TouchableOpacity>
       </View>
 
@@ -227,7 +300,7 @@ export default function WeeklyScheduleScreen() {
                     key={day} style={[styles.dayTab, selectedDay === day && styles.dayTabActive]}
                     onPress={() => setSelectedDay(day)}
                   >
-                      <Text style={[styles.dayText, selectedDay === day && styles.dayTextActive]}>{DAY_LABELS[day as DayKey]}</Text>
+                      <Text style={[styles.dayText, selectedDay === day && styles.dayTextActive]}>{DAY_LABELS[day]}</Text>
                   </TouchableOpacity>
               ))}
           </ScrollView>
@@ -251,27 +324,32 @@ export default function WeeklyScheduleScreen() {
              </View>
           </View>
 
-          <Text style={styles.dateTitle}>Lịch trình {DAY_LABELS[selectedDay as DayKey]}</Text>
-          {currentDayItems.map((item: ScheduleItem) => (
-              <View key={item.instanceId} style={styles.timelineRow}>
-                   <View style={styles.timeColumn}>
-                        <Text style={styles.timeText}>{item.time}</Text>
-                        <View style={styles.line} />
-                    </View>
-                    <View style={styles.cardWrapper}>
-                        <TouchableOpacity style={styles.activityCard} onPress={() => handleEditExisting(item)}>
-                            <View style={[styles.iconBox, { backgroundColor: item.type === 'workout' ? '#FFF0F0' : '#E8F5E9' }]}>
-                                <Text style={{fontSize: 20}}>{item.icon}</Text>
-                            </View>
-                            <View style={{flex: 1}}>
-                                <Text style={styles.activityTitle}>{item.title}</Text>
-                                <Text style={styles.activitySub}>{item.type === 'workout' ? 'Đốt' : 'Nạp'}: {Math.abs(item.cal)} Kcal</Text>
-                            </View>
-                            <Ionicons name="settings-outline" size={18} color="#CCC" />
-                        </TouchableOpacity>
-                    </View>
-              </View>
-          ))}
+          <Text style={styles.dateTitle}>Lịch trình {DAY_LABELS[selectedDay]}</Text>
+          
+          {currentDayItems.length === 0 ? (
+              <Text style={{textAlign: 'center', color: '#999', marginTop: 20}}>Chưa có hoạt động nào trong ngày này.</Text>
+          ) : (
+              currentDayItems.map((item) => (
+                  <View key={item.instanceId} style={styles.timelineRow}>
+                       <View style={styles.timeColumn}>
+                            <Text style={styles.timeText}>{item.time}</Text>
+                            <View style={styles.line} />
+                        </View>
+                        <View style={styles.cardWrapper}>
+                            <TouchableOpacity style={styles.activityCard} onPress={() => handleEditExisting(item)}>
+                                <View style={[styles.iconBox, { backgroundColor: item.type === 'workout' ? '#FFF0F0' : '#E8F5E9' }]}>
+                                    <Text style={{fontSize: 20}}>{item.icon}</Text>
+                                </View>
+                                <View style={{flex: 1}}>
+                                    <Text style={styles.activityTitle}>{item.title}</Text>
+                                    <Text style={styles.activitySub}>{item.type === 'workout' ? 'Đốt' : 'Nạp'}: {Math.abs(item.cal)} Kcal</Text>
+                                </View>
+                                <Ionicons name="settings-outline" size={18} color="#CCC" />
+                            </TouchableOpacity>
+                        </View>
+                  </View>
+              ))
+          )}
           
           <TouchableOpacity style={styles.addBtn} onPress={handleOpenAddPicker}>
               <Ionicons name="add-circle" size={24} color={colors.primary} />
@@ -280,41 +358,45 @@ export default function WeeklyScheduleScreen() {
           <View style={{height: 100}} />
       </ScrollView>
 
-      {/* MODAL 1: PICKER (Giữ nguyên) */}
+      {/* MODAL 1: PICKER */}
       <Modal visible={pickerVisible} animationType="slide" transparent onRequestClose={() => setPickerVisible(false)}>
           <View style={styles.modalOverlay}>
               <View style={styles.modalContent}>
                    <View style={styles.modalHeader}>
                        <Text style={styles.modalTitle}>Chọn từ Kho</Text>
-                       <TouchableOpacity onPress={() => setPickerVisible(false)}><Ionicons name="close" size={24} /></TouchableOpacity>
+                       <TouchableOpacity onPress={() => setPickerVisible(false)}><Ionicons name="close" size={24} color="#333" /></TouchableOpacity>
                    </View>
-                   <ScrollView style={{maxHeight: 300}}>
-                      {inventory.map((item) => (
-                          <TouchableOpacity key={item.id} style={styles.pickerItem} onPress={() => handlePickItem(item)}>
-                              <Text style={{fontSize: 24, marginRight: 12}}>{item.icon}</Text>
-                              <View style={{flex: 1}}>
-                                  <Text style={styles.pickerTitle}>{item.title}</Text>
-                                  <Text style={styles.pickerSub}>{item.type === 'workout' ? 'Tập luyện' : 'Ăn uống'} • {item.cal} Kcal</Text>
-                              </View>
-                              <Ionicons name="add" size={24} color={colors.primary} />
-                          </TouchableOpacity>
-                      ))}
-                   </ScrollView>
+                   {inventory.length > 0 ? (
+                       <ScrollView style={{maxHeight: 300}}>
+                         {inventory.map((item) => (
+                             <TouchableOpacity key={item.instanceId} style={styles.pickerItem} onPress={() => handlePickItem(item)}>
+                                 <Text style={{fontSize: 24, marginRight: 12}}>{item.icon}</Text>
+                                 <View style={{flex: 1}}>
+                                     <Text style={styles.pickerTitle}>{item.title}</Text>
+                                     <Text style={styles.pickerSub}>{item.type === 'workout' ? 'Tập luyện' : 'Ăn uống'} • {item.cal} Kcal</Text>
+                                 </View>
+                                 <Ionicons name="add" size={24} color={colors.primary} />
+                             </TouchableOpacity>
+                         ))}
+                       </ScrollView>
+                   ) : (
+                       <Text style={{textAlign: 'center', color: '#999', marginVertical: 20}}>Kho trống</Text>
+                   )}
               </View>
           </View>
       </Modal>
 
-      {/* --- MODAL 2: EDITOR (CẬP NHẬT INPUT GIỜ) --- */}
+      {/* MODAL 2: EDITOR */}
       <Modal visible={editorVisible} animationType="slide" transparent onRequestClose={() => setEditorVisible(false)}>
           <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
               <View style={styles.modalContent}>
                   <View style={styles.modalHeader}>
                        <Text style={styles.modalTitle}>{isNew ? "Thêm vào lịch" : "Chỉnh sửa"}</Text>
-                       <TouchableOpacity onPress={() => setEditorVisible(false)}><Ionicons name="close" size={24} /></TouchableOpacity>
+                       <TouchableOpacity onPress={() => setEditorVisible(false)}><Ionicons name="close" size={24} color="#333" /></TouchableOpacity>
                   </View>
 
                   <View style={styles.formGroup}>
-                      {/* Read-only Info */}
+                      {/* Info Món */}
                       <View style={{flexDirection: 'row', alignItems: 'center', marginBottom: 16}}>
                           <View style={[styles.iconBox, {marginRight: 10, backgroundColor: editingItem?.type === 'workout' ? '#FFF0F0' : '#E8F5E9'}]}>
                               <Text style={{fontSize: 24}}>{editingItem?.icon}</Text>
@@ -330,14 +412,13 @@ export default function WeeklyScheduleScreen() {
                           </View>
                       </View>
 
-                      {/* --- THAY INPUT BẰNG NÚT CHỌN GIỜ --- */}
+                      {/* Chọn Giờ */}
                       <Text style={styles.label}>Thời gian thực hiện:</Text>
                       <TouchableOpacity style={styles.timeInputBtn} onPress={openTimePicker}>
                           <Text style={styles.timeInputText}>{formTime}</Text>
                           <Ionicons name="time-outline" size={24} color={colors.primary} />
                       </TouchableOpacity>
 
-                      {/* --- COMPONENT TIME PICKER --- */}
                       {showTimePicker && (
                           <DateTimePicker
                               testID="dateTimePicker"
@@ -348,7 +429,6 @@ export default function WeeklyScheduleScreen() {
                               onChange={handleTimeChange}
                           />
                       )}
-                      {/* Nút Done cho iOS Picker */}
                       {showTimePicker && Platform.OS === 'ios' && (
                           <View style={{flexDirection: 'row', justifyContent: 'flex-end', marginTop: 10}}>
                              <TouchableOpacity style={{backgroundColor: colors.primary, padding: 8, borderRadius: 8}} onPress={() => setShowTimePicker(false)}>
@@ -365,11 +445,11 @@ export default function WeeklyScheduleScreen() {
 
                   <View style={styles.modalFooter}>
                       {!isNew && (
-                          <TouchableOpacity style={styles.deleteBtn} onPress={handleDelete}>
+                          <TouchableOpacity style={styles.deleteBtn} onPress={handleDeleteItemLocal}>
                               <Ionicons name="trash-outline" size={24} color="#FF6B6B" />
                           </TouchableOpacity>
                       )}
-                      <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
+                      <TouchableOpacity style={styles.saveBtn} onPress={handleSaveItemLocal}>
                           <Text style={{color: '#FFF', fontWeight: 'bold'}}>Lưu & Sắp xếp</Text>
                       </TouchableOpacity>
                   </View>
@@ -382,11 +462,10 @@ export default function WeeklyScheduleScreen() {
 }
 
 const styles = StyleSheet.create({
-    // ... (Giữ nguyên các style cũ) ...
     safeArea: { flex: 1, backgroundColor: '#F5F7FA' },
-    header: { flexDirection: 'row', justifyContent: 'space-between', padding: 16, backgroundColor: '#FFF', alignItems: 'center' },
-    headerTitle: { fontSize: 18, fontWeight: 'bold' },
-    daysContainer: { backgroundColor: '#FFF', paddingBottom: 12 },
+    header: { flexDirection: 'row', justifyContent: 'space-between', padding: 16, backgroundColor: '#FFF', alignItems: 'center', borderBottomWidth: 1, borderColor: '#EEE' },
+    headerTitle: { fontSize: 18, fontWeight: 'bold', color: '#333' },
+    daysContainer: { backgroundColor: '#FFF', paddingBottom: 12, paddingTop: 12 },
     dayTab: { width: 50, height: 50, alignItems: 'center', justifyContent: 'center', borderRadius: 12, marginRight: 8, backgroundColor: '#F5F5F5' },
     dayTabActive: { backgroundColor: colors.primary },
     dayText: { fontWeight: '600', color: '#888' },
@@ -408,13 +487,13 @@ const styles = StyleSheet.create({
     iconBox: { width: 40, height: 40, borderRadius: 8, justifyContent: 'center', alignItems: 'center', marginRight: 12 },
     activityTitle: { fontWeight: 'bold', color: '#333' },
     activitySub: { fontSize: 12, color: '#888' },
-    addBtn: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', padding: 14, borderStyle: 'dashed', borderWidth: 1, borderColor: colors.primary, borderRadius: 12, marginLeft: 62 },
+    addBtn: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', padding: 14, borderStyle: 'dashed', borderWidth: 1, borderColor: colors.primary, borderRadius: 12, marginLeft: 62, marginTop: 10 },
     
     // MODAL & FORM STYLES
     modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
     modalContent: { backgroundColor: '#FFF', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24 },
     modalHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20 },
-    modalTitle: { fontSize: 18, fontWeight: 'bold' },
+    modalTitle: { fontSize: 18, fontWeight: 'bold', color: '#333' },
     pickerItem: { flexDirection: 'row', alignItems: 'center', padding: 12, borderBottomWidth: 1, borderColor: '#F5F5F5' },
     pickerTitle: { fontWeight: '600', color: '#333' },
     pickerSub: { fontSize: 12, color: '#888' },
