@@ -16,6 +16,8 @@ class HealthMetric(models.Model):
     has_hypertension = models.BooleanField(default=False)
     has_diabetes = models.BooleanField(default=False)
     updated_at = models.DateTimeField(auto_now=True)
+    daily_burn = models.IntegerField(null=True, blank=True)
+    daily_calo = models.IntegerField(null=True, blank=True)
 
     def __str__(self):
         return f"{self.user.full_name} - {self.updated_at.strftime('%Y-%m-%d %H:%M:%S')}"
@@ -27,7 +29,7 @@ class HealthMetric(models.Model):
         return round(float(weight_kg) / ((float(height_cm) / 100) ** 2), 2)
 
     @staticmethod
-    def calculate_tdee(user, weight_kg, height_cm, activity_level):
+    def calculate_tdee(user, weight_kg, height_cm, activity_level, goal):
         if not (user and weight_kg and height_cm and hasattr(user, 'date_of_birth') and user.date_of_birth and user.gender):
            return None
         today = date.today()
@@ -45,11 +47,38 @@ class HealthMetric(models.Model):
         1: 1.2,
         2: 1.375,
         3: 1.55,
-        4: 1.725,
-        5: 1.9
+        4: 1.725
        }
         factor = activity_map.get(activity_level, 1.2)
-        return int(bmr * factor)
+        tdee  = int(bmr * factor)
+        daily_calo = daily_burn = 0
+        
+        if goal == 1:  # Lose Weight
+            total_deficit = max(300, min(tdee * 0.2, 1000))  # clamp 300-1000 kcal
+            diet_deficit = total_deficit * 0.6
+            exercise_deficit = total_deficit * 0.4
+            daily_calo = int(max(bmr, tdee - diet_deficit))
+            daily_burn = int(max(200, exercise_deficit))
+            # strategy = "Thâm hụt calo 20%: 60% từ ăn uống, 40% từ tập luyện"
+
+        elif goal == 3:  # Gain Muscle
+            surplus = max(250, min(tdee * 0.15, 500))
+            daily_calo = int(tdee + surplus)
+            daily_burn = 300  # calo tập luyện
+            # strategy = "Tăng calo 10-15%, tập luyện 300 kcal"
+
+        else:  # Maintain
+            daily_calo = tdee
+            sedentary_tdee = bmr * 1.2
+            estimated_active_calories = tdee - sedentary_tdee
+            daily_burn = int(max(200, estimated_active_calories))
+            # strategy = "Ăn bằng TDEE, duy trì cân nặng, tập luyện nhẹ"
+        return {
+            "tdee":tdee,
+            "daily_calo": daily_calo,
+            "daily_burn": daily_burn,
+            # "strategy": strategy
+        }
     
     @staticmethod
     def add_metric(user_id, height_cm=None, weight_kg=None, heart_rate=None,
@@ -65,13 +94,24 @@ class HealthMetric(models.Model):
         # Tính BMI
         bmi_value = HealthMetric.calculate_bmi(weight_kg, height_cm)
         # Tính TDEE
-        tdee_value = HealthMetric.calculate_tdee(user, weight_kg, height_cm, activity_level)
+        tdee_data = HealthMetric.calculate_tdee(user, weight_kg, height_cm, activity_level,goal)
+        
+        if tdee_data:
+            daily_calo_value = tdee_data["daily_calo"]   # calo ăn
+            daily_burn_value = tdee_data["daily_burn"]     # calo tập
+            tdee_value = tdee_data["tdee"]                 # TDEE
+        else:
+            daily_calo_value = 0
+            daily_burn_value = 0
+            tdee_value = 0
 
         metric = HealthMetric(
             user=user,
             height_cm=height_cm,
             weight_kg=weight_kg,
             bmi=bmi_value,
+            daily_burn = daily_burn_value,
+            daily_calo =daily_calo_value,
             tdee=tdee_value,
             heart_rate=heart_rate,
             blood_pressure_systolic=blood_pressure_systolic,

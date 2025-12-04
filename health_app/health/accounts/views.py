@@ -15,9 +15,6 @@ import hashlib
 from django.core.mail import send_mail
 from datetime import datetime, timedelta
 
-
-
-
 def token_required(func):
     @wraps(func)
     def wrapper(request, *args, **kwargs):
@@ -42,28 +39,43 @@ def sha256_hash(pw):
 @api_view(['POST'])
 @csrf_exempt
 def login_view(request):
-    data = json.loads(request.body)
-    email = data.get("email")
-    password = data.get("password")
-
+    if request.method != "POST":
+        return JsonResponse({"error": "POST required"}, status=400)
+    
+    try:
+        data = json.loads(request.body)
+        email = data.get("email")
+        password = data.get("password")
+    except (json.JSONDecodeError, KeyError):
+        return JsonResponse({"error": "Invalid request"}, status=400)
+    
+    # Kiểm tra email có tồn tại không
     try:
         user = Account.objects.get(email=email)
     except Account.DoesNotExist:
         return JsonResponse({"error": "Invalid email or password"}, status=401)
-
+    
+    # Xử lý hash cũ (sha256) và hash mới Django
+    password_valid = False
     if check_password(password, user.password_hash):
-        pass
-    if user.password_hash == sha256_hash(password):
+        password_valid = True
+    elif user.password_hash == sha256_hash(password):
+        # Upgrade hash cũ sang hash Django an toàn hơn
         user.password_hash = make_password(password)
         user.save()
-    # Token tự tạo
+        password_valid = True
+    
+    if not password_valid:
+        return JsonResponse({"error": "Login failed"}, status=401)
+    
+    # Tạo JWT token
     payload = {
         "user_id": user.user_id,
         "email": user.email
     }
-
     token = jwt.encode(payload, settings.SECRET_KEY, algorithm="HS256")
-
+    
+    # Trả về kết quả
     return JsonResponse({
         "message": "Login successful",
         "token": token,
@@ -73,8 +85,9 @@ def login_view(request):
             "email": user.email,
         }
     })
-# @csrf_exempt
+    
 @api_view(['POST'])
+@csrf_exempt
 def register_view(request):
     if request.method != "POST":
         return JsonResponse({"error": "POST required"}, status=400)
@@ -103,9 +116,16 @@ def register_view(request):
     )
     user.set_password(password)
     user.save()
+    
+    payload = {
+        "user_id": user.user_id,
+        "email": user.email
+    }
+    token = jwt.encode(payload, settings.SECRET_KEY, algorithm="HS256")
 
     return JsonResponse({
         "message": "Registration successful",
+        "token": token,
         "user": {
             "id": user.user_id,
             "full_name": user.full_name,
@@ -114,7 +134,7 @@ def register_view(request):
     })
 @token_required
 @csrf_exempt
-def get_user_frofile(request):
+def get_user_profile(request):
     if request.method !="GET":
         return JsonResponse({"error": "GET required"})
     user = request.user
@@ -141,6 +161,7 @@ def update_user_profile(request):
     phone = data.get("phone")
     gender = data.get("gender")
     dob = data.get("dob")  # chuỗi 'YYYY-MM-DD'
+    
     if full_name is not None:
         user.full_name = full_name
     if phone is not None:
@@ -183,22 +204,30 @@ def verify_token_view(request):
 @token_required
 @csrf_exempt
 def post_passwoord(request):
-    if request.method !="POST":
-         return JsonResponse({"error": "POST required"}, status=400)
+    if request.method != "POST":
+        return JsonResponse({"error": "POST required"}, status=400)
+
     user = request.user
     data = json.loads(request.body)
+
     old_password = data.get("old_password")
     new_password = data.get("new_password")
     confirm_password = data.get("confirm_password")
-    
+
     if not old_password or not new_password or not confirm_password:
-        return JsonResponse({"error": "All fields are required"}, status = 400)
+        return JsonResponse({"error": "All fields are required"}, status=400)
+
+    # ---- FIX HERE ----
     if not check_password(old_password, user.password_hash):
-         return JsonResponse({"error": "Old password is incorrect"}, status=400)
+        return JsonResponse({"error": "Old password is incorrect"}, status=400)
+
     if new_password != confirm_password:
-         return JsonResponse({"error": "New password and confirmation do not match"}, status=400)
-    user.password = make_password(new_password)
+        return JsonResponse({"error": "New password and confirmation do not match"}, status=400)
+
+    # ---- UPDATE ----
+    user.password_hash = make_password(new_password)
     user.save()
+
     return JsonResponse({"message": "Password updated successfully"})
 
 @csrf_exempt

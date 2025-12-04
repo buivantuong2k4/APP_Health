@@ -47,9 +47,9 @@ export default function DashboardScreen() {
           weight: latest.weight_kg,
           height: latest.height_cm,
           tdee: latest.tdee,
+          caloriesBurned: latest.daily_burn,
+          caloriesEaten:latest.daily_calo,
           caloriesGoal: 2000, // Bạn có thể cho backend trả luôn
-          caloriesEaten: 1250, // Giả lập FE
-          caloriesBurned: 350, // Giả lập FE
         });
       } catch (err) {
         console.error("Lỗi tải Dashboard:", err);
