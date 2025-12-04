@@ -9,4 +9,5 @@ urlpatterns = [
     path("get_weekly_plans/", views.get_weekly_plans,name = "get_weekly_plans"),
     path("get_plan_tracking/", views.get_plan_tracking, name="get_plan_tracking"),
     path("put_plan_tracking/<int:tracking_id>/", views.put_plan_tracking, name="put_plan_tracking"),
+    path("plan_tracking_report/", views.plan_tracking_report, name="plan_tracking_report"),
 ]

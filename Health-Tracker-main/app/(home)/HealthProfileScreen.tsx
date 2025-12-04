@@ -3,10 +3,10 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import axios from "axios";
 import { useRouter } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
+import { SafeAreaView } from "react-native-safe-area-context";
 import {
   ActivityIndicator,
   Alert,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Switch,
@@ -61,16 +61,41 @@ const GOALS = [
     icon: "arrow-up-circle-outline",
   },
 ];
+
 const GOALS_MAP_NUMBER: Record<number, string> = {
   1: "lose_weight",
   2: "maintain",
   3: "gain_muscle",
 };
+
 const ACTIVITY_MAP_NUMBER: Record<number, string> = {
   1: "sedentary",
   2: "light",
   3: "moderate",
   4: "active",
+};
+
+type HealthProfile = {
+  height: string;
+  weight: string;
+  activityId: string;
+  activityIdDb?: string;
+  goalId: string;
+  bmi: string;
+  tdee: string;
+  daily_calo: string;
+  metricId?: number;
+  conditions: {
+    diabetes: boolean;
+    bloodPressure: boolean;
+  };
+};
+
+type UserProfile = {
+  age: string;
+  gender: "male" | "female";
+  email?: string;
+  username?: string;
 };
 
 export default function HealthProfileScreen() {
@@ -79,21 +104,53 @@ export default function HealthProfileScreen() {
   const [loading, setLoading] = useState(false);
 
   // --- STATE DỮ LIỆU ---
-  const [profile, setProfile] = useState({
+  const [profile, setProfile] = useState<HealthProfile>({
     height: "",
     weight: "",
-    age: "",
-    gender: "male",
     activityId: "",
-    goalId: "",
+    activityIdDb: "",
+    goalId: "maintain",
     bmi: "",
     tdee: "",
+    daily_calo: "",
+    metricId: undefined,
     conditions: {
       diabetes: false,
       bloodPressure: false,
     },
   });
 
+  const [user, setUser] = useState<UserProfile>({
+    age: "",
+    gender: "male",
+  });
+
+  // =====================================
+  //  Hàm tính tuổi từ DOB (backend)
+  // =====================================
+  const calculateAge = (dob: string | null) => {
+    if (!dob) return null;
+
+    const birthDate = new Date(dob);
+    const today = new Date();
+
+    let age = today.getFullYear() - birthDate.getFullYear();
+    const monthDiff = today.getMonth() - birthDate.getMonth();
+
+    // Nếu chưa tới sinh nhật năm nay → trừ 1
+    if (
+      monthDiff < 0 ||
+      (monthDiff === 0 && today.getDate() < birthDate.getDate())
+    ) {
+      age--;
+    }
+
+    return age;
+  };
+
+  // =====================================
+  //  Lấy metric health mới nhất từ /analysis/
+  // =====================================
   useEffect(() => {
     const fetchProfile = async () => {
       try {
@@ -104,24 +161,26 @@ export default function HealthProfileScreen() {
           headers: { Authorization: `Bearer ${token}` },
         });
 
-        const latest = res.data.metrics[0];
+        const latest = res.data.metrics?.[0];
         if (!latest) return;
 
-        setProfile({
-          height: latest.height_cm.toString(),
-          weight: latest.weight_kg.toString(),
-          age: latest.age?.toString() || "25", // nếu backend trả age
-          gender: latest.gender || "male",
-          activityId: ACTIVITY_MAP_NUMBER[latest.activity_level],
-          goalId: GOALS_MAP_NUMBER[latest.goal],
-          bmi: latest.bmi.toString(),
-          tdee: latest.tdee.toString(),
+        setProfile((prev) => ({
+          ...prev,
+          height: latest.height_cm?.toString() || prev.height,
+          weight: latest.weight_kg?.toString() || prev.weight,
+          activityId: ACTIVITY_MAP_NUMBER[latest.activity_level] || prev.activityId,
+          activityIdDb:
+            ACTIVITY_MAP_NUMBER[latest.activity_level] || prev.activityIdDb,
+          goalId: GOALS_MAP_NUMBER[latest.goal] || prev.goalId,
+          bmi: latest.bmi?.toString() || prev.bmi,
+          daily_calo: latest.daily_calo?.toString() || prev.daily_calo,
+          tdee: latest.tdee?.toString() || prev.tdee,
           metricId: latest.metric_id,
           conditions: {
             diabetes: latest.has_diabetes,
             bloodPressure: latest.has_hypertension,
           },
-        });
+        }));
       } catch (err) {
         console.error("Lỗi tải profile:", err);
       }
@@ -130,35 +189,170 @@ export default function HealthProfileScreen() {
     fetchProfile();
   }, []);
 
-  // --- TÍNH TOÁN REAL-TIME ---
+  // =====================================
+  //  Lấy hồ sơ user từ /accounts/user_profile/
+  // =====================================
+  useEffect(() => {
+    const fetchUserProfile = async () => {
+      try {
+        const token = await AsyncStorage.getItem("auth_token");
+        if (!token) return;
+
+        const res = await axios.get(
+          "http://10.0.2.2:8000/accounts/user_profile/",
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+
+        const age = calculateAge(res.data.date_of_birth);
+
+        setUser((prev) => ({
+          ...prev,
+          age: age?.toString() || prev.age,
+          gender: (res.data.gender as "male" | "female") || prev.gender,
+          email: res.data.email || prev.email,
+          username: res.data.username || prev.username,
+        }));
+      } catch (err) {
+        console.error("Lỗi get_user_profile:", err);
+      }
+    };
+
+    fetchUserProfile();
+  }, []);
+
+  // =====================================
+  //  Convert age -> DOB (YYYY-MM-DD) để gửi lên backend
+  // =====================================
+  const ageToDOB = (age: string) => {
+    const ageNum = parseInt(age, 10);
+    if (isNaN(ageNum)) return null;
+
+    const today = new Date();
+    const birthYear = today.getFullYear() - ageNum;
+
+    const month = String(today.getMonth() + 1).padStart(2, "0");
+    const day = String(today.getDate()).padStart(2, "0");
+
+    return `${birthYear}-${month}-${day}`;
+  };
+
+   // =====================================
+  //  TÍNH BMI, TDEE, daily_calo, daily_burn (useMemo)
+  //  Đồng bộ với HealthMetric.calculate_tdee bên backend
+  // =====================================
   const stats = useMemo(() => {
-    const h = parseFloat(profile.height) || 0;
-    const w = parseFloat(profile.weight) || 0;
-    const a = parseFloat(profile.age) || 0;
+    const goal = GOALS.find((g) => g.id === profile.goalId) || GOALS[1];
 
-    const activity =
-      ACTIVITY_LEVELS.find((l) => l.id === profile.activityId) ||
-      ACTIVITY_LEVELS[0];
-    const goal = GOALS.find((g) => g.id === profile.goalId) || GOALS[0];
+    const height = parseFloat(profile.height) || 0; // cm
+    const weight = parseFloat(profile.weight) || 0; // kg
+    const age = parseInt(user.age, 10) || 25;
+    const gender = user.gender; // 'male' | 'female'
 
-    // 1. BMI
-
-    // 2. BMR (Mifflin-St Jeor)
+    // --- BMR (Mifflin–St Jeor) ---
     let bmr = 0;
-    if (h > 0 && w > 0 && a > 0) {
-      const base = 10 * w + 6.25 * h - 5 * a;
-      bmr = profile.gender === "male" ? base + 5 : base - 161;
+    if (gender === "male") {
+      bmr = 10 * weight + 6.25 * height - 5 * age + 5;
+    } else {
+      bmr = 10 * weight + 6.25 * height - 5 * age - 161;
     }
 
-    // 3. TDEE (Tiêu hao thực tế)
-    const tdee = Math.round(bmr * activity.factor);
-    const bmi = parseFloat(profile.bmi);
-    // 4. TARGET (Mục tiêu ăn uống)
-    const target = tdee + goal.factor;
+    // --- Activity factor ---
+    const activityNew =
+      ACTIVITY_LEVELS.find((l) => l.id === profile.activityId) ||
+      ACTIVITY_LEVELS[0];
 
-    return { bmi, tdee, target };
-  }, [profile]);
+    const tdee = Math.round(bmr * activityNew.factor);
 
+    // --- BMI (show cho UI) ---
+    const bmi =
+      height > 0
+        ? parseFloat((weight / Math.pow(height / 100, 2)).toFixed(1))
+        : 0;
+
+    // Helper clamp giống backend
+    const clamp = (v: number, low: number, high: number) =>
+      Math.max(low, Math.min(v, high));
+
+    let daily_calo_value = 0;
+    let daily_burn = 0;
+
+    // ============================
+    // 1️⃣ GIẢM CÂN (goal.id === "lose_weight")
+    // ============================
+    if (goal.id === "lose_weight") {
+      const raw_deficit = tdee * 0.2;
+      let total_deficit = clamp(raw_deficit, 300, 800); // 300–800 kcal
+
+      let net_goal = tdee - total_deficit;
+
+      // không để net < 90% BMR
+      const min_safe_net = bmr * 0.9;
+      if (net_goal < min_safe_net) {
+        net_goal = min_safe_net;
+        total_deficit = tdee - net_goal;
+      }
+
+      const diet_deficit = total_deficit * 0.6;
+      const exercise_deficit = total_deficit * 0.4;
+
+      daily_burn = Math.max(200, exercise_deficit);
+      daily_calo_value = net_goal + daily_burn;
+    }
+
+    // ============================
+    // 3️⃣ TĂNG CÂN / TĂNG CƠ
+    // ============================
+    else if (goal.id === "gain_muscle") {
+      const raw_surplus = tdee * 0.15;
+      const surplus = clamp(raw_surplus, 250, 500);
+
+      const net_goal = tdee + surplus;
+
+      if (profile.activityId === "sedentary") {
+        daily_burn = 250;
+      } else if (profile.activityId === "light") {
+        daily_burn = 300;
+      } else if (profile.activityId === "moderate") {
+        daily_burn = 350;
+      } else {
+        daily_burn = 400;
+      }
+
+      daily_calo_value = net_goal + daily_burn;
+    }
+
+    // ============================
+    // 2️⃣ GIỮ CÂN (mặc định)
+    // ============================
+    else {
+      const net_goal = tdee;
+
+      if (profile.activityId === "sedentary") {
+        daily_burn = 200;
+      } else if (profile.activityId === "light") {
+        daily_burn = 250;
+      } else if (profile.activityId === "moderate") {
+        daily_burn = 300;
+      } else {
+        daily_burn = 350;
+      }
+
+      daily_calo_value = net_goal + daily_burn;
+    }
+
+    const daily_calo = Math.round(daily_calo_value);
+
+    return {
+      bmi,
+      tdee,
+      daily_calo,
+      daily_burn: Math.round(daily_burn),
+    };
+  }, [profile.height, profile.weight, profile.goalId, profile.activityId, user]);
+
+  // =====================================
+  //  HANDLE SAVE
+  // =====================================
   const handleSave = async () => {
     setLoading(true);
     try {
@@ -167,59 +361,89 @@ export default function HealthProfileScreen() {
 
       if (!profile.metricId) throw new Error("Không có metric để cập nhật");
 
+      // ---- PAYLOAD METRIC ----
       const payload = {
-        height_cm: parseFloat(profile.height),
-        weight_kg: parseFloat(profile.weight),
+        height_cm: Math.round(parseFloat(profile.height)),
+        weight_kg: Math.round(parseFloat(profile.weight)),
+        tdee: Math.round(stats.tdee),
+        daily_calo: Math.round(stats.daily_calo),
+        daily_burn: Math.round(stats.daily_burn),
         goal: GOALS.findIndex((g) => g.id === profile.goalId) + 1,
+        activity_level:
+          ACTIVITY_LEVELS.findIndex((a) => a.id === profile.activityId) + 1,
         has_hypertension: profile.conditions.bloodPressure,
         has_diabetes: profile.conditions.diabetes,
-        activity_level:
-          ACTIVITY_LEVELS.findIndex((a) => a.id === profile.activityId) + 1, // map ngược về DB
       };
 
+      // 1️⃣ UPDATE METRIC
       const res = await axios.put(
         `http://10.0.2.2:8000/analysis/update/${profile.metricId}/`,
         payload,
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        }
+        { headers: { Authorization: `Bearer ${token}` } }
       );
 
-      Alert.alert("Thành công", "Đã cập nhật metric!");
-      // Cập nhật lại state nếu backend trả về metric mới
       const updated = res.data.metric;
+
+      // Cập nhật lại profile FE sau khi save Metric
       setProfile((prev) => ({
         ...prev,
-        height: updated.height_cm.toString(),
-        weight: updated.weight_kg.toString(),
-        bmi: updated.bmi.toString(),
-        tdee: updated.tdee.toString(),
-        activityId: ACTIVITY_MAP_NUMBER[updated.activity_level],
-        goalId: GOALS_MAP_NUMBER[updated.goal],
-        conditions: {
-          diabetes: prev.conditions.diabetes,
-          bloodPressure: prev.conditions.bloodPressure, // dùng state frontend
-        },
+        height: updated?.height_cm?.toString() || prev.height,
+        weight: updated?.weight_kg?.toString() || prev.weight,
+        bmi: updated?.bmi?.toString() || prev.bmi,
+        tdee: updated?.tdee?.toString() || prev.tdee,
+        daily_calo: updated?.daily_calo?.toString() || prev.daily_calo,
+        activityId: updated?.activity_level
+          ? ACTIVITY_MAP_NUMBER[updated.activity_level]
+          : prev.activityId,
+        activityIdDb: updated?.activity_level
+          ? ACTIVITY_MAP_NUMBER[updated.activity_level]
+          : prev.activityIdDb,
+        goalId: updated?.goal ? GOALS_MAP_NUMBER[updated.goal] : prev.goalId,
       }));
+
+      // 2️⃣ UPDATE USER PROFILE
+      await axios.put(
+        "http://10.0.2.2:8000/accounts/update_user_profile/",
+        {
+          dob: ageToDOB(user.age),
+          gender: user.gender,
+        },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      Alert.alert("Thành công", "Đã cập nhật hồ sơ & chỉ số!");
     } catch (err) {
-      console.error("Lỗi cập nhật metric:", err);
+      console.error("Lỗi cập nhật:", err);
       Alert.alert("Lỗi", "Cập nhật thất bại");
     } finally {
       setLoading(false);
     }
   };
 
-  const updateProfile = (key: keyof typeof profile, value: any) => {
+  // =====================================
+  //  CÁC HÀM UPDATE STATE
+  // =====================================
+  const updateUser = (field: keyof UserProfile, value: any) => {
+    setUser((prev) => ({
+      ...prev,
+      [field]: value,
+    }));
+  };
+
+  const updateProfile = (key: keyof HealthProfile, value: any) => {
     setProfile((prev) => ({ ...prev, [key]: value }));
   };
 
-  const toggleCondition = (key: keyof typeof profile.conditions) => {
+  const toggleCondition = (key: keyof HealthProfile["conditions"]) => {
     setProfile((prev) => ({
       ...prev,
       conditions: { ...prev.conditions, [key]: !prev.conditions[key] },
     }));
   };
 
+  // =====================================
+  //  RENDER
+  // =====================================
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.header}>
@@ -243,32 +467,32 @@ export default function HealthProfileScreen() {
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
       >
-        {/* 1. DASHBOARD CHỈ SỐ (QUAN TRỌNG NHẤT) */}
+        {/* 1. DASHBOARD CHỈ SỐ */}
         <View style={styles.previewCard}>
           <View style={styles.previewRow}>
             <View style={styles.previewItem}>
               <Text style={styles.previewLabel}>BMI</Text>
               <Text style={[styles.previewValue, { color: "#FFF" }]}>
-                {stats.bmi}
+                {stats.bmi || "--"}
               </Text>
             </View>
             <View style={styles.verticalLine} />
             <View style={styles.previewItem}>
-              <Text style={styles.previewLabel}>TDEE (Tiêu hao)</Text>
+              <Text style={styles.previewLabel}>TDEE</Text>
               <Text style={[styles.previewValue, { color: "#AAA" }]}>
-                {stats.tdee}
+                {stats.tdee || "--"}
               </Text>
             </View>
             <View style={styles.verticalLine} />
             <View style={styles.previewItem}>
-              <Text style={styles.previewLabel}>MỤC TIÊU ĂN</Text>
+              <Text style={styles.previewLabel}>Tiêu thụ</Text>
               <Text
                 style={[
                   styles.previewValue,
                   { color: colors.primary, fontSize: 22 },
                 ]}
               >
-                {stats.target}
+                {stats.daily_calo || "--"}
               </Text>
               <Text
                 style={{
@@ -283,7 +507,7 @@ export default function HealthProfileScreen() {
           </View>
         </View>
 
-        {/* 2. MỤC TIÊU (MỚI) */}
+        {/* 2. MỤC TIÊU */}
         <Text style={styles.sectionTitle}>Mục tiêu của bạn</Text>
         <View style={styles.goalContainer}>
           {GOALS.map((g) => (
@@ -322,14 +546,14 @@ export default function HealthProfileScreen() {
                 <TouchableOpacity
                   style={[
                     styles.genderBtn,
-                    profile.gender === "male" && styles.genderBtnActive,
+                    user.gender === "male" && styles.genderBtnActive,
                   ]}
-                  onPress={() => updateProfile("gender", "male")}
+                  onPress={() => updateUser("gender", "male")}
                 >
                   <Text
                     style={[
                       styles.genderText,
-                      profile.gender === "male" && styles.genderTextActive,
+                      user.gender === "male" && styles.genderTextActive,
                     ]}
                   >
                     Nam
@@ -338,14 +562,14 @@ export default function HealthProfileScreen() {
                 <TouchableOpacity
                   style={[
                     styles.genderBtn,
-                    profile.gender === "female" && styles.genderBtnActive,
+                    user.gender === "female" && styles.genderBtnActive,
                   ]}
-                  onPress={() => updateProfile("gender", "female")}
+                  onPress={() => updateUser("gender", "female")}
                 >
                   <Text
                     style={[
                       styles.genderText,
-                      profile.gender === "female" && styles.genderTextActive,
+                      user.gender === "female" && styles.genderTextActive,
                     ]}
                   >
                     Nữ
@@ -357,8 +581,8 @@ export default function HealthProfileScreen() {
               <Text style={styles.label}>Tuổi</Text>
               <TextInput
                 style={styles.input}
-                value={profile.age}
-                onChangeText={(t) => updateProfile("age", t)}
+                value={user.age}
+                onChangeText={(t) => updateUser("age", t)}
                 keyboardType="numeric"
               />
             </View>
@@ -418,7 +642,7 @@ export default function HealthProfileScreen() {
           </TouchableOpacity>
         ))}
 
-        {/* 5. TIỀN SỬ BỆNH LÝ (MỚI) */}
+        {/* 5. TIỀN SỬ BỆNH LÝ */}
         <Text style={styles.sectionTitle}>Tiền sử bệnh lý (Nếu có)</Text>
         <View style={styles.listContainer}>
           <View style={styles.listItem}>

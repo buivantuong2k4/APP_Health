@@ -26,33 +26,65 @@ export default function DashboardScreen() {
   const router = useRouter();
   const [showSidebar, setShowSidebar] = useState(false);
 
-  // ⬅️ Chỉ khai báo một lần
-  const [healthData, setHealthData] = useState(null);
+  // Dữ liệu health lấy từ API
+  const [healthData, setHealthData] = useState<null | {
+    bmi: number;
+    weight: number;
+    height: number;
+    tdee: number;
+    caloriesBurned: number;
+    caloriesEaten: number;
+    caloriesGoal: number;
+    caloriesBurn: number;
+
+  }>(null);
 
   useEffect(() => {
     const fetchDashboardData = async () => {
       try {
+        // 1. Lấy token đã lưu khi login
         const token = await AsyncStorage.getItem("auth_token");
-        if (!token) return;
+        if (!token) {
+          console.warn(
+            "Không tìm thấy token, chuyển về màn hình đăng nhập nếu cần."
+          );
+          return;
+        }
 
+        // 2. Gọi đúng API Django: get_analysis_by_user
+        // Backend trả: { user: string, today: string, metrics: [...] }
         const res = await axios.get("http://10.0.2.2:8000/analysis/", {
           headers: { Authorization: `Bearer ${token}` },
         });
 
-        const latest = res.data.metrics[0];
-        if (!latest) return;
+        const metrics = res.data?.metrics || [];
+        const latest = metrics[0]; // bản ghi mới nhất (đã order -updated_at ở backend)
 
+        if (!latest) {
+          console.warn("Không có health metrics cho user này.");
+          return;
+        }
+
+        // 3. Map dữ liệu từ API sang state dùng cho UI
         setHealthData({
           bmi: latest.bmi,
           weight: latest.weight_kg,
           height: latest.height_cm,
           tdee: latest.tdee,
-          caloriesGoal: 2000, // Bạn có thể cho backend trả luôn
-          caloriesEaten: 1250, // Giả lập FE
-          caloriesBurned: 350, // Giả lập FE
+
+          // 🔥 dùng CALO THỰC TẾ trong ngày (tính từ PlanTracking)
+          caloriesBurned: latest.actual_calo_burned_today ?? 0,
+          caloriesEaten: latest.actual_calo_eaten_today ?? 0,
+
+          // mục tiêu calo: lấy từ daily_calo (goal)
+          caloriesGoal: latest.daily_calo || 2000,
+          caloriesBurn: latest.daily_burn || 500,
         });
-      } catch (err) {
-        console.error("Lỗi tải Dashboard:", err);
+      } catch (err: any) {
+        console.error(
+          "Lỗi tải Dashboard:",
+          err.response?.data || err.message || err
+        );
       }
     };
 
@@ -70,18 +102,27 @@ export default function DashboardScreen() {
     );
   }
 
-  // Tính toán logic hiển thị
-  const caloriesRemaining =
-    healthData.caloriesGoal -
-    healthData.caloriesEaten +
-    healthData.caloriesBurned;
-  const progress = Math.min(
-    healthData.caloriesEaten / healthData.caloriesGoal,
-    1
-  );
-  const strokeDashoffset = CIRCUMFERENCE * (1 - progress);
+ // --- NET CALORIES DASHBOARD LOGIC ---
 
-  const getBMIStatus = (bmi) => {
+// Net calories = Đã ăn - Đã đốt
+const netCalories = healthData.caloriesEaten - healthData.caloriesBurned;
+const GoalCalories = healthData.caloriesGoal - healthData.caloriesBurn;
+
+// Còn lại = mục tiêu - net
+const caloriesRemaining = GoalCalories - netCalories;
+
+
+// Tiến độ vòng tròn (0 → 1)
+const progress = Math.max(
+  0,
+  Math.min(netCalories / (GoalCalories|| 1), 1)
+);
+
+// Stroke vòng tròn
+const strokeDashoffset = CIRCUMFERENCE * (1 - progress);
+
+
+  const getBMIStatus = (bmi: number) => {
     if (bmi < 18.5) return { label: "Thiếu cân", color: "#F39C12" };
     if (bmi < 24.9) return { label: "Bình thường", color: "#2ECC71" };
     if (bmi < 29.9) return { label: "Thừa cân", color: "#E67E22" };
@@ -157,8 +198,8 @@ export default function DashboardScreen() {
 
               {/* Text ở giữa vòng tròn */}
               <View style={styles.chartTextContainer}>
-                <Text style={styles.chartBigNumber}>
-                  {Math.round(caloriesRemaining)}
+                <Text style={styles.headerTitle}>
+                  {Math.round(caloriesRemaining)}/ {Math.round(GoalCalories)}
                 </Text>
                 <Text style={styles.chartLabel}>Còn lại</Text>
               </View>
@@ -168,8 +209,8 @@ export default function DashboardScreen() {
           {/* Stats Row */}
           <View style={styles.statsRow}>
             <View style={styles.statItem}>
-              <Text style={styles.statLabel}>Mục tiêu</Text>
-              <Text style={styles.statVal}>{healthData.caloriesGoal}</Text>
+              <Text style={styles.statLabel}>IN|OUT</Text>
+              <Text style={styles.statVal}>{healthData.caloriesGoal}|{healthData.caloriesBurn}</Text>
             </View>
             <View style={styles.statItem}>
               <Text style={styles.statLabel}>Đã ăn</Text>
@@ -214,7 +255,7 @@ export default function DashboardScreen() {
             </Text>
           </View>
 
-          {/* TDEE Card (Thay thế BMR vì thực tế hơn) */}
+          {/* TDEE Card */}
           <View style={styles.metricCard}>
             <View style={[styles.iconBox, { backgroundColor: "#E8F5E9" }]}>
               <MaterialCommunityIcons name="fire" size={24} color="#2ECC71" />

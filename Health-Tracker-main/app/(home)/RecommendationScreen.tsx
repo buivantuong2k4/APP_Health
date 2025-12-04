@@ -80,7 +80,7 @@ useEffect(() => {
 
   
   // STATE DATA
-  const USER_ID = user?.user_id ||1 ;
+
   
   // State quản lý danh sách từ API
   const [suggestions, setSuggestions] = useState({
@@ -107,13 +107,14 @@ useEffect(() => {
 
   // --- 1. GỌI API LẤY DỮ LIỆU ---
   useEffect(() => {
-    fetchSuggestions();
-  }, []);
+    if (user && user.id){
+    fetchSuggestions();}
+  }, [user]);
 
   const fetchSuggestions = async () => {
     try {
-        console.log("Fetching from:", `${API_URL}/api/selection/suggestions?user_id=${USER_ID}`);
-        const response = await fetch(`${API_URL}/api/selection/suggestions?user_id=${USER_ID}`);
+        console.log("Fetching from:", `${API_URL}/api/selection/suggestions?user_id=${user?.id || 1}`);
+        const response = await fetch(`${API_URL}/api/selection/suggestions?user_id=${user?.id || 1}`);
         const data: BackendResponse = await response.json();
 
         if ((data as any).error) {
@@ -253,7 +254,7 @@ useEffect(() => {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                user_id: USER_ID,
+                user_id: user?.id || 1,
                 food_ids: foodIds,
                 exercise_ids: exIds,
                 custom_items: customListToSend // <--- Gửi danh sách custom ở đây

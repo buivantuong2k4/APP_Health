@@ -72,10 +72,13 @@ useEffect(() => {
     }
   })();
 }, []);
+ console.log("Current User:", user);
+ 
 
   
   // STATE DATA
-  const USER_ID = user?.user_id ||1 ;
+ 
+
   const [planId, setPlanId] = useState<number | null>(null);
   const [weekData, setWeekData] = useState<WeeklyPlanData>({});
   const [startDate, setStartDate] = useState<Date | null>(null);
@@ -90,15 +93,19 @@ useEffect(() => {
   // --- 1. LẤY DỮ LIỆU TỪ API ---
   useFocusEffect(
     useCallback(() => {
-      fetchCurrentPlan();
-    }, [])
+      if (user && user.id) {
+         fetchCurrentPlan();
+      }
+    }, [user])
   );
 
   const fetchCurrentPlan = async () => {
+   
       try {
           // Backend GET đã được sửa để merge dữ liệu từ bảng tracking vào JSON
-          const response = await fetch(`${API_URL}/api/plan/current?user_id=${USER_ID}`);
+          const response = await fetch(`${API_URL}/api/plan/current?user_id=${user.id}`);
           const data = await response.json();
+        
           
           if (data && data.plan_id) {
               setPlanId(data.plan_id);
@@ -162,7 +169,7 @@ useEffect(() => {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                  user_id: USER_ID,
+                  user_id: user?.id || 1,
                   weekly_plan_id: planId,
                   date: dateStr,
                   item_type: dbItemType,

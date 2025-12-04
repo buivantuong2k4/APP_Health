@@ -3,6 +3,8 @@ import axios from "axios";
 import { useRouter } from "expo-router";
 import * as SecureStore from "expo-secure-store";
 import { useState } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+
 import {
   Alert,
   Platform, // Cần import để xử lý UI khác nhau giữa iOS/Android
@@ -108,11 +110,15 @@ export default function RegisterScreen() {
       const data = response.data;
 
       // Nếu backend trả token thì lưu vào SecureStore
-      if (data.token) {
-        await SecureStore.setItemAsync("jwt_token", data.token);
-      }
+      // if (data.token) {
+      //   await SecureStore.setItemAsync("auth_token", data.token);
+      // }
 
-      await SecureStore.setItemAsync("user_info", JSON.stringify(data.user));
+      // await SecureStore.setItemAsync("user_info", JSON.stringify(data.user));
+
+      const { token, user } = response.data;
+            await AsyncStorage.setItem("auth_token", token); // Lưu token
+            await AsyncStorage.setItem("user_info", JSON.stringify(user));
 
       Alert.alert("Đăng ký thành công!");
       router.push("/(home)/HealthInfo");

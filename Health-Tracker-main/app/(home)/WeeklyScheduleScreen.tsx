@@ -67,7 +67,7 @@ useEffect(() => {
 }, []);
 
   // STATE DATA
-  const USER_ID = user?.user_id ||1 ;
+ 
 //   
   
   const [loading, setLoading] = useState(false);
@@ -242,7 +242,7 @@ useEffect(() => {
 
           // 2. Gọi API Lưu DB
           const payload = {
-              user_id: USER_ID,
+              user_id: user?.id || 1,
               plan_data: weeklyPlan
           };
 
