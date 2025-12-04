@@ -49,10 +49,10 @@ export default function LoginScreen() {
       alert("Login successful!");
       // Navigate to HealthInfo screen
        router.push("/(home)/DashboardScreen");
+          
       } catch (error) {
-      // eslint-disable-next-line import/no-named-as-default-member
-      if (axios.isAxiosError(error)) {
-        alert("Login failed");
+      if (axios.isAxiosError(error) && error.response) {
+        alert(error.response.data.error || "Login failed");
       } else {
         alert("Network error");
       }

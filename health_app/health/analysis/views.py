@@ -57,11 +57,6 @@ def upload_metrics_view(request, metric_id):
         metric  = HealthMetric.objects.get(id = metric_id)
     except HealthMetric.DoesNotExist:
         return JsonResponse({"error": "Metric not found"}, status=404)
-    
-    tdee_data = HealthMetric.calculate_tdee(metric.user, metric.weight_kg, metric.height_cm, metric.activity_level,metric.goal)
-        
-    if tdee_data:
-        tdee_value = tdee_data["tdee"]           
     data = json.loads(request.body)
     metric.height_cm = data.get("height_cm", metric.height_cm)
     metric.weight_kg = data.get("weight_kg", metric.weight_kg)
@@ -74,8 +69,7 @@ def upload_metrics_view(request, metric_id):
     metric.has_diabetes = data.get("has_diabetes", metric.has_diabetes)
     metric.activity_level = data.get("activity_level", metric.activity_level)
     metric.bmi = HealthMetric.calculate_bmi(metric.weight_kg, metric.height_cm)
-    metric.tdee = data.get("tdee", metric.tdee)
-    metric.daily_calo = data.get("daily_calo", metric.daily_calo)
+    metric.tdee = HealthMetric.calculate_tdee(metric.user, metric.weight_kg, metric.height_cm, metric.activity_level)
     metric.save()
     return JsonResponse({
         "message": "Metric updated",
@@ -118,8 +112,6 @@ def get_analysis_by_user(request):
             "bmi": m.bmi,
             "tdee": m.tdee,
             "goal":m.goal,
-            "daily_calo": m.daily_calo,
-            "daily_burn":m.daily_burn,
             "has_hypertension": m.has_hypertension,
             "has_diabetes": m.has_diabetes,
             "sleep_hours": m.sleep_hours,
@@ -300,113 +292,3 @@ def put_plan_tracking(request, tracking_id):
             "is_completed": tracking.is_completed
         }
     })
-
-# def calculate_user_targets(weight_kg, height_cm, age, gender, activity_level, goal):
-    """
-    Tính toán mục tiêu Calo Nạp vào (Intake) và Calo Tiêu hao (Burn) dựa trên chỉ số cơ thể.
-    
-    Logic cập nhật:
-    - Sử dụng công thức Mifflin-St Jeor để tính BMR.
-    - Tính TDEE dựa trên hệ số vận động (PAL).
-    - Áp dụng 'Thâm hụt linh hoạt' (Dynamic Deficit) ~20% TDEE cho giảm cân an toàn.
-    - Chia sẻ gánh nặng giảm cân: 60% từ ăn kiêng, 40% từ tập luyện.
-    
-    Input:
-        - weight_kg (float): Cân nặng (kg)
-        - height_cm (float): Chiều cao (cm)
-        - age (int): Tuổi
-        - gender (str): 'Male' hoặc 'Female'
-        - activity_level (int): 1 (Sedentary) -> 5 (Extra Active)
-        - goal (int): 
-            1: Giảm cân (Lose Weight)
-            2: Tăng cơ (Gain Muscle)
-            3: Duy trì (Maintain)
-            
-    Output:
-        - Dict chứa: tdee, daily_intake (calo ăn), daily_burn (calo tập)
-    """
-    
-    # --- BƯỚC 1: TÍNH BMR (Basal Metabolic Rate) ---
-    # Công thức Mifflin-St Jeor (Được ưu tiên hiện nay)
-    if gender == 'Male':
-        bmr = (10 * weight_kg) + (6.25 * height_cm) - (5 * age) + 5
-    else:
-        bmr = (10 * weight_kg) + (6.25 * height_cm) - (5 * age) - 161
-
-    # --- BƯỚC 2: TÍNH TDEE (Total Daily Energy Expenditure) ---
-    # Mapping Activity Level sang hệ số
-    # Level 1: Ít vận động (1.2)
-    # Level 2: Nhẹ (1.375)
-    # Level 3: Vừa (1.55)
-    # Level 4: Nặng (1.725)
-    # Level 5: Rất nặng (1.9)
-    activity_multipliers = {
-        1: 1.2,
-        2: 1.375,
-        3: 1.55,
-        4: 1.725,
-        5: 1.9
-    }
-    
-    # Lấy hệ số, mặc định 1.2 nếu không tìm thấy
-    multiplier = activity_multipliers.get(activity_level, 1.2)
-    tdee = int(bmr * multiplier)
-
-    # --- BƯỚC 3: TÍNH MỤC TIÊU (INTAKE & BURN) ---
-    daily_intake = 0
-    daily_burn = 0
-    
-    if goal == 1: # GIẢM CÂN (Lose Weight)
-        # [AN TOÀN] Dùng quy tắc thâm hụt 20% TDEE thay vì con số cố định
-        total_deficit_needed = tdee * 0.20 
-        
-        # Kẹp biên (Safety Clamp): 
-        # Thâm hụt tối thiểu 300kcal để thấy hiệu quả
-        # Thâm hụt tối đa 1000kcal để tránh suy nhược
-        total_deficit_needed = max(300, min(total_deficit_needed, 1000))
-        
-        # [CHIẾN THUẬT CHIA SẺ GÁNH NẶNG] 
-        # 60% thâm hụt đến từ ăn uống (Diet)
-        # 40% thâm hụt đến từ tập luyện (Exercise)
-        diet_deficit = total_deficit_needed * 0.6
-        exercise_deficit = total_deficit_needed * 0.4
-        
-        # 1. Mục tiêu ăn vào (Calo In):
-        # Safety Floor: Không bao giờ khuyên ăn dưới mức BMR
-        daily_intake = int(max(bmr, tdee - diet_deficit))
-        
-        # 2. Mục tiêu tập luyện (Calo Out):
-        # Đặt mức tối thiểu 200kcal để khuyến khích vận động tim mạch
-        base_burn = 200 
-        daily_burn = int(max(base_burn, exercise_deficit))
-
-    elif goal == 2: # TĂNG CÂN / TĂNG CƠ (Gain Muscle)
-        # Tăng cân an toàn: Dư thừa (Surplus) khoảng 10-15% TDEE
-        surplus = tdee * 0.15
-        
-        # Kẹp biên thặng dư: 250 - 500 kcal
-        surplus = max(250, min(surplus, 500))
-        
-        daily_intake = int(tdee + surplus)
-        
-        # Tập luyện để kích thích cơ bắp sử dụng năng lượng dư thừa
-        # Mức 300kcal là vừa đủ cho một buổi tập gym hiệu quả mà không đốt hết calo thặng dư
-        daily_burn = 300 
-
-    else: # DUY TRÌ (Maintain)
-        # Ăn bằng TDEE để giữ cân
-        daily_intake = int(tdee)
-        
-        # Mục tiêu vận động để giữ sức khỏe
-        # Tính phần năng lượng 'Active' trong TDEE
-        sedentary_tdee = bmr * 1.2
-        estimated_active_calories = tdee - sedentary_tdee
-        
-        # Nếu người dùng chọn level thấp, vẫn khuyến khích tập nhẹ 200kcal
-        daily_burn = int(max(200, estimated_active_calories))
-
-    return {
-        "tdee": int(tdee),
-        "daily_intake": int(daily_intake), # Lưu vào DB: daily_calorie_target
-        "daily_burn": int(daily_burn)      # Lưu vào DB: daily_burn_target
-    }

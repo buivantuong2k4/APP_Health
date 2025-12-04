@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     "preferences",
     'rest_framework',
     'corsheaders',
+    "AI",
 ]
 
 REST_FRAMEWORK = {
@@ -93,12 +94,15 @@ WSGI_APPLICATION = "health.wsgi.application"
 
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.mysql",
-        "NAME": "health_data",
-        "USER": "khanhtrang",
-        "PASSWORD": "28042004",
-        "HOST": "127.0.0.1",
-        "PORT": "3306", 
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": "postgres",
+        "USER": "postgres.wkvcndaglyoeucfcnuoi",
+        "PASSWORD": "123456789",
+        "HOST": "aws-1-ap-southeast-1.pooler.supabase.com",
+        "PORT": "5432",
+        "OPTIONS": {
+            "sslmode": "require",
+        }, 
     }
 }
 

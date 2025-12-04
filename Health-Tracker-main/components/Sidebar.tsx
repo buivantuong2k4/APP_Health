@@ -1,5 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { usePathname, useRouter } from "expo-router";
+import { useEffect, useState } from "react";
 import {
   Dimensions,
   Image,
@@ -63,6 +65,24 @@ const MENU_GROUPS = [
 export default function Sidebar({ visible, onClose }: SidebarProps) {
   const router = useRouter();
   const pathname = usePathname(); // Hook để lấy đường dẫn hiện tại
+  const [user, setUser] = useState<any | null>(null);
+
+  useEffect(() => {
+    const loadUser = async () => {
+      try {
+        const userString = await AsyncStorage.getItem("user_info");
+        if (userString) {
+          const parsedUser = JSON.parse(userString);
+          setUser(parsedUser);
+          // console.log("User from storage:", parsedUser);
+        }
+      } catch (error) {
+        console.log("Error loading user from AsyncStorage:", error);
+      }
+    };
+
+    loadUser();
+  }, []);
 
   const handleNavigate = (route: string) => {
     onClose();
@@ -105,7 +125,7 @@ export default function Sidebar({ visible, onClose }: SidebarProps) {
                    <View style={styles.onlineDot} />
                </View>
                <View style={styles.userInfo}>
-                   <Text style={styles.userName} numberOfLines={1}>Nguyễn Văn A</Text>
+                   <Text style={styles.userName} numberOfLines={1}>{user?.full_name || "guest" }</Text>
                    <Text style={styles.userStatus}>Member</Text>
                </View>
                <TouchableOpacity onPress={onClose} style={styles.closeBtn}>

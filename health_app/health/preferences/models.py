@@ -17,6 +17,7 @@ class Food(models.Model):
     
     def __str__(self):
         return self.name
+    
 
 class UserFoodPreferences(models.Model):
     PREFERENCE_TYPE_CHOICES = [
@@ -45,6 +46,7 @@ class UserFoodPreferences(models.Model):
         )
         food_preference.save()
         return food_preference
+    
 
     
 class Exercise(models.Model):
@@ -62,6 +64,7 @@ class Exercise(models.Model):
 
     def __str__(self):
         return self.name
+   
     
 class UserExercisePreferences(models.Model):
     PREFERENCE_TYPE_CHOICES = [

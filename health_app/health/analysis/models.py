@@ -1,6 +1,7 @@
 from django.db import models
 from accounts.models import Account  # liên kết với Account
 from datetime import date, datetime, timedelta
+import uuid
 class HealthMetric(models.Model):
     user = models.ForeignKey(Account, on_delete=models.CASCADE, related_name="metrics")
     height_cm = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
@@ -16,8 +17,6 @@ class HealthMetric(models.Model):
     has_hypertension = models.BooleanField(default=False)
     has_diabetes = models.BooleanField(default=False)
     updated_at = models.DateTimeField(auto_now=True)
-    daily_burn = models.IntegerField(null=True, blank=True)
-    daily_calo = models.IntegerField(null=True, blank=True)
 
     def __str__(self):
         return f"{self.user.full_name} - {self.updated_at.strftime('%Y-%m-%d %H:%M:%S')}"
@@ -29,7 +28,7 @@ class HealthMetric(models.Model):
         return round(float(weight_kg) / ((float(height_cm) / 100) ** 2), 2)
 
     @staticmethod
-    def calculate_tdee(user, weight_kg, height_cm, activity_level, goal):
+    def calculate_tdee(user, weight_kg, height_cm, activity_level):
         if not (user and weight_kg and height_cm and hasattr(user, 'date_of_birth') and user.date_of_birth and user.gender):
            return None
         today = date.today()
@@ -47,38 +46,11 @@ class HealthMetric(models.Model):
         1: 1.2,
         2: 1.375,
         3: 1.55,
-        4: 1.725
+        4: 1.725,
+        5: 1.9
        }
         factor = activity_map.get(activity_level, 1.2)
-        tdee  = int(bmr * factor)
-        daily_calo = daily_burn = 0
-        
-        if goal == 1:  # Lose Weight
-            total_deficit = max(300, min(tdee * 0.2, 1000))  # clamp 300-1000 kcal
-            diet_deficit = total_deficit * 0.6
-            exercise_deficit = total_deficit * 0.4
-            daily_calo = int(max(bmr, tdee - diet_deficit))
-            daily_burn = int(max(200, exercise_deficit))
-            # strategy = "Thâm hụt calo 20%: 60% từ ăn uống, 40% từ tập luyện"
-
-        elif goal == 3:  # Gain Muscle
-            surplus = max(250, min(tdee * 0.15, 500))
-            daily_calo = int(tdee + surplus)
-            daily_burn = 300  # calo tập luyện
-            # strategy = "Tăng calo 10-15%, tập luyện 300 kcal"
-
-        else:  # Maintain
-            daily_calo = tdee
-            sedentary_tdee = bmr * 1.2
-            estimated_active_calories = tdee - sedentary_tdee
-            daily_burn = int(max(200, estimated_active_calories))
-            # strategy = "Ăn bằng TDEE, duy trì cân nặng, tập luyện nhẹ"
-        return {
-            "tdee":tdee,
-            "daily_calo": daily_calo,
-            "daily_burn": daily_burn,
-            # "strategy": strategy
-        }
+        return int(bmr * factor)
     
     @staticmethod
     def add_metric(user_id, height_cm=None, weight_kg=None, heart_rate=None,
@@ -94,24 +66,13 @@ class HealthMetric(models.Model):
         # Tính BMI
         bmi_value = HealthMetric.calculate_bmi(weight_kg, height_cm)
         # Tính TDEE
-        tdee_data = HealthMetric.calculate_tdee(user, weight_kg, height_cm, activity_level,goal)
-        
-        if tdee_data:
-            daily_calo_value = tdee_data["daily_calo"]   # calo ăn
-            daily_burn_value = tdee_data["daily_burn"]     # calo tập
-            tdee_value = tdee_data["tdee"]                 # TDEE
-        else:
-            daily_calo_value = 0
-            daily_burn_value = 0
-            tdee_value = 0
+        tdee_value = HealthMetric.calculate_tdee(user, weight_kg, height_cm, activity_level)
 
         metric = HealthMetric(
             user=user,
             height_cm=height_cm,
             weight_kg=weight_kg,
             bmi=bmi_value,
-            daily_burn = daily_burn_value,
-            daily_calo =daily_calo_value,
             tdee=tdee_value,
             heart_rate=heart_rate,
             blood_pressure_systolic=blood_pressure_systolic,
@@ -124,6 +85,7 @@ class HealthMetric(models.Model):
         )
         metric.save()
         return metric
+  
            
     
 class WeeklyPlans(models.Model):
@@ -156,56 +118,28 @@ class WeeklyPlans(models.Model):
 
         plan.save()
         return plan
+   
     
-class PlanTracking (models.Model):
+class PlanTracking(models.Model):
     ITEM_TYPE_CHOICES = [
         ('exercise', 'Exercise'),
         ('food', 'Food'),
     ]
     user_id = models.ForeignKey(Account, on_delete=models.CASCADE, related_name="plan_trackings")
-    date  = models.DateField(null=True, blank=True)
-    item_type  = models.CharField(max_length=10, choices=ITEM_TYPE_CHOICES,null=True, blank=True)
-    item_id = models.IntegerField(null=True, blank=True)
+    date = models.DateField(null=True, blank=True)
+    item_type = models.CharField(max_length=10, choices=ITEM_TYPE_CHOICES, null=True, blank=True)
+    
+    # Giữ nguyên item_id là Integer (Lưu ý: món custom sẽ phải lưu là 0 hoặc Null ở đây)
+    item_id = models.IntegerField(null=True, blank=True) 
+    
     is_completed = models.BooleanField(default=False)
-    weekly_plan = models.ForeignKey(WeeklyPlans, on_delete=models.CASCADE, related_name="trackings", null=True, blank=True)
+    weekly_plan = models.ForeignKey('WeeklyPlans', on_delete=models.CASCADE, related_name="trackings", null=True, blank=True)
+    
+    # --- [MỚI THÊM] ---
+    # varchar(50), cho phép NULL, và có Index để tìm kiếm nhanh
+    instance_id = models.CharField(max_length=50, null=True, blank=True, db_index=True) 
+    # ------------------
+    
     created_at = models.DateTimeField(auto_now_add=True)
     
-    @staticmethod
-    def add_plan_tracking (weekly_plan):
-        user = weekly_plan.user_id
-        plan_data  = weekly_plan.plan_data or {}
-        meal_plan = plan_data.get("meal_plan", {})
-        workout_plan = plan_data.get("workout_plan", {})
-        days_offset = {
-        "Monday": 0,
-        "Tuesday": 1,
-        "Wednesday": 2,
-        "Thursday": 3,
-        "Friday": 4,
-        "Saturday": 5,
-        "Sunday": 6,
-    }
-        for day_name in ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]:
-            day_date = weekly_plan.start_date + timedelta(days=days_offset[day_name])
-            
-            if day_name in meal_plan:
-                for meal_type, meal_info in meal_plan[day_name].items():
-                    if meal_type =="total_calories":
-                        continue
-                    PlanTracking.objects.create(
-                        user_id = user,
-                        date = day_date,
-                        item_type = "food",
-                        item_id = meal_info.get("id"),
-                        weekly_plan = weekly_plan
-                    )
-            if day_name in workout_plan:
-                for exercise in workout_plan[day_name].get("exercises", []):
-                    PlanTracking.objects.create(
-                        user_id = user,
-                        date = day_date,
-                        item_type = "exercise",
-                        item_id = exercise.get("id"),
-                        weekly_plan = weekly_plan
-                    )
-            
+   
