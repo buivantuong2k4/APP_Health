@@ -3,10 +3,10 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import axios from "axios";
 import { useRouter } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
-import { SafeAreaView } from "react-native-safe-area-context";
 import {
   ActivityIndicator,
   Alert,
+  SafeAreaView,
   ScrollView,
   StyleSheet,
   Switch,
@@ -82,41 +82,17 @@ export default function HealthProfileScreen() {
   const [profile, setProfile] = useState({
     height: "",
     weight: "",
+    age: "",
+    gender: "male",
     activityId: "",
     goalId: "",
     bmi: "",
     tdee: "",
-    daily_calo: "",
     conditions: {
       diabetes: false,
       bloodPressure: false,
     },
   });
-  const [user, setUser] = useState({
-    age: "",
-    gender: "male",
-  });
-
-  const calculateAge = (dob) => {
-  if (!dob) return null;
-
-  const birthDate = new Date(dob);
-  const today = new Date();
-
-  let age = today.getFullYear() - birthDate.getFullYear();
-  const monthDiff = today.getMonth() - birthDate.getMonth();
-
-  // Nếu chưa tới sinh nhật năm nay → trừ 1
-  if (
-    monthDiff < 0 ||
-    (monthDiff === 0 && today.getDate() < birthDate.getDate())
-  ) {
-    age--;
-  }
-
-  return age;
-};
-
 
   useEffect(() => {
     const fetchProfile = async () => {
@@ -134,11 +110,11 @@ export default function HealthProfileScreen() {
         setProfile({
           height: latest.height_cm.toString(),
           weight: latest.weight_kg.toString(),
+          age: latest.age?.toString() || "25", // nếu backend trả age
+          gender: latest.gender || "male",
           activityId: ACTIVITY_MAP_NUMBER[latest.activity_level],
-          activityIdDb: ACTIVITY_MAP_NUMBER[latest.activity_level],
           goalId: GOALS_MAP_NUMBER[latest.goal],
           bmi: latest.bmi.toString(),
-          daily_calo: latest.daily_calo.toString(),
           tdee: latest.tdee.toString(),
           metricId: latest.metric_id,
           conditions: {
@@ -154,128 +130,84 @@ export default function HealthProfileScreen() {
     fetchProfile();
   }, []);
 
-useEffect(() => { 
-  const fetchUserProfile = async () => {
+  // --- TÍNH TOÁN REAL-TIME ---
+  const stats = useMemo(() => {
+    const h = parseFloat(profile.height) || 0;
+    const w = parseFloat(profile.weight) || 0;
+    const a = parseFloat(profile.age) || 0;
+
+    const activity =
+      ACTIVITY_LEVELS.find((l) => l.id === profile.activityId) ||
+      ACTIVITY_LEVELS[0];
+    const goal = GOALS.find((g) => g.id === profile.goalId) || GOALS[0];
+
+    // 1. BMI
+
+    // 2. BMR (Mifflin-St Jeor)
+    let bmr = 0;
+    if (h > 0 && w > 0 && a > 0) {
+      const base = 10 * w + 6.25 * h - 5 * a;
+      bmr = profile.gender === "male" ? base + 5 : base - 161;
+    }
+
+    // 3. TDEE (Tiêu hao thực tế)
+    const tdee = Math.round(bmr * activity.factor);
+    const bmi = parseFloat(profile.bmi);
+    // 4. TARGET (Mục tiêu ăn uống)
+    const target = tdee + goal.factor;
+
+    return { bmi, tdee, target };
+  }, [profile]);
+
+  const handleSave = async () => {
+    setLoading(true);
     try {
       const token = await AsyncStorage.getItem("auth_token");
-      if (!token) return;
+      if (!token) throw new Error("Token không tồn tại");
 
-      const res = await axios.get(
-        "http://10.0.2.2:8000/accounts/user_profile/",
-        { headers: { Authorization: `Bearer ${token}` } }
+      if (!profile.metricId) throw new Error("Không có metric để cập nhật");
+
+      const payload = {
+        height_cm: parseFloat(profile.height),
+        weight_kg: parseFloat(profile.weight),
+        goal: GOALS.findIndex((g) => g.id === profile.goalId) + 1,
+        has_hypertension: profile.conditions.bloodPressure,
+        has_diabetes: profile.conditions.diabetes,
+        activity_level:
+          ACTIVITY_LEVELS.findIndex((a) => a.id === profile.activityId) + 1, // map ngược về DB
+      };
+
+      const res = await axios.put(
+        `http://10.0.2.2:8000/analysis/update/${profile.metricId}/`,
+        payload,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        }
       );
 
-      const age = calculateAge(res.data.date_of_birth);
-
-      setUser((prev) => ({
+      Alert.alert("Thành công", "Đã cập nhật metric!");
+      // Cập nhật lại state nếu backend trả về metric mới
+      const updated = res.data.metric;
+      setProfile((prev) => ({
         ...prev,
-        age: age?.toString() || prev.age,
-        gender: res.data.gender || prev.gender,
-        email: res.data.email || prev.email,
-        username: res.data.username || prev.username
+        height: updated.height_cm.toString(),
+        weight: updated.weight_kg.toString(),
+        bmi: updated.bmi.toString(),
+        tdee: updated.tdee.toString(),
+        activityId: ACTIVITY_MAP_NUMBER[updated.activity_level],
+        goalId: GOALS_MAP_NUMBER[updated.goal],
+        conditions: {
+          diabetes: prev.conditions.diabetes,
+          bloodPressure: prev.conditions.bloodPressure, // dùng state frontend
+        },
       }));
-
     } catch (err) {
-      console.error("Lỗi get_user_profile:", err);
+      console.error("Lỗi cập nhật metric:", err);
+      Alert.alert("Lỗi", "Cập nhật thất bại");
+    } finally {
+      setLoading(false);
     }
   };
-
-  fetchUserProfile();
-}, []);
-
-const ageToDOB = (age: string) => {
-  const ageNum = parseInt(age, 10);
-  if (isNaN(ageNum)) return null;
-
-  const today = new Date();
-  const birthYear = today.getFullYear() - ageNum;
-
-  // YYYY-MM-DD (giữ ngày-tháng hiện tại)
-  const month = String(today.getMonth() + 1).padStart(2, "0");
-  const day = String(today.getDate()).padStart(2, "0");
-
-  return `${birthYear}-${month}-${day}`;
-};
-
-
-const handleSave = async () => {
-  setLoading(true);
-  try {
-    const token = await AsyncStorage.getItem("auth_token");
-    if (!token) throw new Error("Token không tồn tại");
-
-    if (!profile.metricId) throw new Error("Không có metric để cập nhật");
-
-    // ---- PAYLOAD METRIC ----
-    const payload = {
-      height_cm: Math.round(parseFloat(profile.height)),
-      weight_kg: Math.round(parseFloat(profile.weight)),
-      tdee: Math.round(stats.tdee),
-      daily_calo: Math.round(stats.daily_calo),
-      goal: GOALS.findIndex((g) => g.id === profile.goalId) + 1,
-      activity_level:
-        ACTIVITY_LEVELS.findIndex((a) => a.id === profile.activityId) + 1,
-      has_hypertension: profile.conditions.bloodPressure,
-      has_diabetes: profile.conditions.diabetes,
-    };
-
-    // ========================
-    // 1️⃣ UPDATE METRIC
-    // ========================
-    const res = await axios.put(
-      `http://10.0.2.2:8000/analysis/update/${profile.metricId}/`,
-      payload,
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
-
-    const updated = res.data.metric;
-
-    // Cập nhật lại profile FE sau khi save Metric
-    setProfile((prev) => ({
-      ...prev,
-      height: updated?.height_cm?.toString() || prev.height,
-      weight: updated?.weight_kg?.toString() || prev.weight,
-      bmi: updated?.bmi?.toString() || prev.bmi,
-      tdee: updated?.tdee?.toString() || prev.tdee,
-      daily_calo: updated?.daily_calo?.toString() || prev.daily_calo,
-      activityId: updated?.activity_level
-        ? ACTIVITY_MAP_NUMBER[updated.activity_level]
-        : prev.activityId,
-      goalId: updated?.goal ? GOALS_MAP_NUMBER[updated.goal] : prev.goalId,
-    }));
-
-    // ========================
-    // 2️⃣ UPDATE USER PROFILE
-    // ========================
-    await axios.put(
-      "http://10.0.2.2:8000/accounts/update_user_profile/",
-      {
-        dob: ageToDOB(user.age),
-    gender: user.gender,
-      },
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
-
-    // =======================
-    // DONE
-    // =======================
-    Alert.alert("Thành công", "Đã cập nhật hồ sơ & chỉ số!");
-
-  } catch (err) {
-    console.error("Lỗi cập nhật:", err);
-    Alert.alert("Lỗi", "Cập nhật thất bại");
-  } finally {
-    setLoading(false);
-  }
-};
-
-
-  const updateUser = (field: any, value: any) => {
-  setUser((prev) => ({
-    ...prev,
-    [field]: value,
-  }));
-};
 
   const updateProfile = (key: keyof typeof profile, value: any) => {
     setProfile((prev) => ({ ...prev, [key]: value }));
@@ -287,60 +219,6 @@ const handleSave = async () => {
       conditions: { ...prev.conditions, [key]: !prev.conditions[key] },
     }));
   };
-const stats = useMemo(() => {
-  const goal = GOALS.find((g) => g.id === profile.goalId) || GOALS[1];
-
-  // luôn tính BMR từ đầu, không dùng TDEE backend
-  const height = parseFloat(profile.height) || 0;
-  const weight = parseFloat(profile.weight) || 0;
-  const age = parseInt(profile.age) || 25;
-  const gender = profile.gender; // 'male' | 'female'
-
-  let bmr = 0;
-  if (gender === "male") {
-    bmr = 10 * weight + 6.25 * height - 5 * age + 5;
-  } else {
-    bmr = 10 * weight + 6.25 * height - 5 * age - 161;
-  }
-
-  const activityDb =
-    ACTIVITY_LEVELS.find((l) => l.id === profile.activityIdDb) ||
-    ACTIVITY_LEVELS[0];
-
-  const activityNew =
-    ACTIVITY_LEVELS.find((l) => l.id === profile.activityId) ||
-    ACTIVITY_LEVELS[0];
-
-  // tdee gốc
-  const tdee = Math.round(bmr * activityNew.factor);
-  const bmi = parseFloat(profile.bmi) || 0;
-
-  let daily_calo_value = tdee;
-  let daily_burn = 0;
-
-  switch (goal.id) {
-    case "lose_weight":
-      const total_deficit = Math.min(Math.max(tdee * 0.2, 300), 1000);
-      daily_calo_value = Math.max(bmr, tdee - total_deficit * 0.6);
-      daily_burn = Math.max(200, total_deficit * 0.4);
-      break;
-
-    case "gain_muscle":
-      const surplus = Math.min(Math.max(tdee * 0.15, 250), 500);
-      daily_calo_value = tdee + surplus;
-      daily_burn = 300;
-      break;
-
-    default:
-      daily_calo_value = tdee;
-      daily_burn = Math.max(200, tdee - bmr * 1.2);
-      break;
-  }
-
-  const daily_calo = Math.round(daily_calo_value);
-
-  return { bmi, tdee, daily_calo, daily_burn };
-}, [profile]);
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -376,21 +254,21 @@ const stats = useMemo(() => {
             </View>
             <View style={styles.verticalLine} />
             <View style={styles.previewItem}>
-              <Text style={styles.previewLabel}>TDEE</Text>
+              <Text style={styles.previewLabel}>TDEE (Tiêu hao)</Text>
               <Text style={[styles.previewValue, { color: "#AAA" }]}>
                 {stats.tdee}
               </Text>
             </View>
             <View style={styles.verticalLine} />
             <View style={styles.previewItem}>
-              <Text style={styles.previewLabel}>Tiêu thụ</Text>
+              <Text style={styles.previewLabel}>MỤC TIÊU ĂN</Text>
               <Text
                 style={[
                   styles.previewValue,
                   { color: colors.primary, fontSize: 22 },
                 ]}
               >
-                {stats.daily_calo}
+                {stats.target}
               </Text>
               <Text
                 style={{
@@ -444,14 +322,14 @@ const stats = useMemo(() => {
                 <TouchableOpacity
                   style={[
                     styles.genderBtn,
-                    user.gender === "male" && styles.genderBtnActive,
+                    profile.gender === "male" && styles.genderBtnActive,
                   ]}
-                  onPress={() => updateUser("gender", "male")}
+                  onPress={() => updateProfile("gender", "male")}
                 >
                   <Text
                     style={[
                       styles.genderText,
-                      user.gender === "male" && styles.genderTextActive,
+                      profile.gender === "male" && styles.genderTextActive,
                     ]}
                   >
                     Nam
@@ -460,14 +338,14 @@ const stats = useMemo(() => {
                 <TouchableOpacity
                   style={[
                     styles.genderBtn,
-                    user.gender === "female" && styles.genderBtnActive,
+                    profile.gender === "female" && styles.genderBtnActive,
                   ]}
-                  onPress={() => updateUser("gender", "female")}
+                  onPress={() => updateProfile("gender", "female")}
                 >
                   <Text
                     style={[
                       styles.genderText,
-                      user.gender === "female" && styles.genderTextActive,
+                      profile.gender === "female" && styles.genderTextActive,
                     ]}
                   >
                     Nữ
@@ -479,8 +357,8 @@ const stats = useMemo(() => {
               <Text style={styles.label}>Tuổi</Text>
               <TextInput
                 style={styles.input}
-                value={user.age}
-                onChangeText={(t) => updateUser("age", t)}
+                value={profile.age}
+                onChangeText={(t) => updateProfile("age", t)}
                 keyboardType="numeric"
               />
             </View>

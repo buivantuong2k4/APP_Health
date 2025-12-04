@@ -8,7 +8,7 @@ if defined _OLD_CODEPAGE (
     "%SystemRoot%\System32\chcp.com" 65001 > nul
 )
 
-set VIRTUAL_ENV=D:\IdeaProjects\APP_Health\health_app\health\venv
+set VIRTUAL_ENV=C:\Users\DELL\Downloads\health_app\health_app\health\venv
 
 if not defined PROMPT set PROMPT=$P$G
 

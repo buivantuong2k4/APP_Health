@@ -61,10 +61,7 @@ export default function ActivityLevelScreen() {
       const previousHealthData = params.data
         ? JSON.parse(decodeURIComponent(params.data as string))
         : {};
-      const rawToken = await AsyncStorage.getItem("auth_token");
-      const token = rawToken?.trim(); // loại bỏ khoảng trắng đầu cuối
-      console.log("Token length:", token?.length);
-      console.log("Token sent:", token);
+
       const finalPayload = {
         height_cm: Number(previousHealthData.height),
         weight_kg: Number(previousHealthData.weight),
@@ -82,7 +79,10 @@ export default function ActivityLevelScreen() {
       };
 
       // const token = await AsyncStorage.getItem("auth_token");
-
+      const rawToken = await AsyncStorage.getItem("auth_token");
+      const token = rawToken?.trim(); // loại bỏ khoảng trắng đầu cuối
+      console.log("Token length:", token?.length);
+      console.log("Token sent:", token);
       console.log("analys sended:", finalPayload);
       // console.log(token)
       if (!token) throw new Error("Token không tồn tại");
@@ -93,7 +93,7 @@ export default function ActivityLevelScreen() {
         {
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
+            Authorization: `Bearer ${token?.trim()}`,
           },
         }
       );
