@@ -18,6 +18,7 @@ def get_data_from_db(query, params=None, single_row=False):
             
             # 1. Chạy lệnh SQL
             cursor.execute(query, params)
+            print("Row count:", cursor.rowcount)
             
             # 2. Phân loại lệnh (SELECT hay INSERT/UPDATE)
             if query.strip().upper().startswith("SELECT"):

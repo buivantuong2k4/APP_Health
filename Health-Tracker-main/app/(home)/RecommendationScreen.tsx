@@ -16,10 +16,11 @@ import {
   View
 } from "react-native";
 import { colors } from "../../constants/theme";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 // --- CẤU HÌNH API ---
 const API_URL = "http://10.0.2.2:8000"; 
-const USER_ID = 1; 
+
 
 // --- TYPE DEFINITIONS ---
 type SuggestionItem = {
@@ -62,6 +63,24 @@ const MEAL_CATEGORIES = [
 
 export default function RecommendationScreen() {
   const router = useRouter();
+//   --- LẤY THÔNG TIN USER TỪ ASYNC STORAGE ---
+
+  const [user, setUser] = useState<any | null>(null);
+
+useEffect(() => {
+  (async () => {
+    try {
+      const data = await AsyncStorage.getItem("user_info");
+      setUser(data ? JSON.parse(data) : null);
+    } catch (e) {
+      console.warn("Failed to load user:", e);
+    }
+  })();
+}, []);
+
+  
+  // STATE DATA
+  const USER_ID = user?.user_id ||1 ;
   
   // State quản lý danh sách từ API
   const [suggestions, setSuggestions] = useState({

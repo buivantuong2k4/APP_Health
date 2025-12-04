@@ -6,6 +6,8 @@ from django.utils import timezone
 from datetime import timedelta
 import json
 
+
+
 # Import các file bên cạnh
 from .ai_engine import HealthRecommender
 from .database_adapter import get_data_from_db
@@ -13,6 +15,7 @@ from .database_adapter import get_data_from_db
 # --- KHỞI TẠO AI ENGINE (Singleton Pattern) ---
 # Chỉ load 1 lần khi server chạy để tối ưu tốc độ
 ai_engine = None
+now =timezone.now()
 
 def get_ai_instance():
     global ai_engine
@@ -117,7 +120,7 @@ class TrackItemView(APIView):
         date_str = data.get('date')
         item_type = data.get('item_type')
         raw_item_id = data.get('item_id')
-        is_completed = data.get('is_completed')
+        is_completed = bool(data.get('is_completed'))
         instance_id = data.get('instance_id')
 
         # Xử lý ID ảo cho món Custom
@@ -140,11 +143,11 @@ class TrackItemView(APIView):
                 get_data_from_db(upd_q, [is_completed, user_id, existing['id']])
             else:
                 ins_q = """
-                    INSERT INTO analysis_plantracking (user_id_id, weekly_plan_id, date, item_type, item_id, is_completed, instance_id)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    INSERT INTO analysis_plantracking (user_id_id, weekly_plan_id, date, item_type, item_id, is_completed, instance_id, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """
                 
-                get_data_from_db(ins_q, [user_id, plan_id, date_str, item_type, db_item_id, is_completed, instance_id])
+                get_data_from_db(ins_q, [user_id, plan_id, date_str, item_type, db_item_id, is_completed, instance_id,now])
                 
             return Response({"success": True})
         except Exception as e:

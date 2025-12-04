@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, useRouter } from "expo-router";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -15,10 +15,12 @@ import {
   View
 } from "react-native";
 import Sidebar from "../../components/Sidebar";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+
 
 // --- CẤU HÌNH API ---
 const API_URL = "http://10.0.2.2:8000"; 
-const USER_ID = 1; 
+ 
 
 // --- CẤU HÌNH MÀU SẮC ---
 const colors = {
@@ -56,8 +58,24 @@ type WeeklyPlanData = {
 
 export default function CalendarScreen() {
   const router = useRouter();
+
+//   LẤY USER_ID TỪ ASYNC STORAGE ---
+ const [user, setUser] = useState<any | null>(null);
+
+useEffect(() => {
+  (async () => {
+    try {
+      const data = await AsyncStorage.getItem("user_info");
+      setUser(data ? JSON.parse(data) : null);
+    } catch (e) {
+      console.warn("Failed to load user:", e);
+    }
+  })();
+}, []);
+
   
   // STATE DATA
+  const USER_ID = user?.user_id ||1 ;
   const [planId, setPlanId] = useState<number | null>(null);
   const [weekData, setWeekData] = useState<WeeklyPlanData>({});
   const [startDate, setStartDate] = useState<Date | null>(null);

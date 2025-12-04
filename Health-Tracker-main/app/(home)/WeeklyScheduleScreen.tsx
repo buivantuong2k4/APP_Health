@@ -18,10 +18,12 @@ import {
 // IMPORT THƯ VIỆN PICKER
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { colors } from "../../constants/theme";
+import { scheduleWeeklyPlan, registerForPushNotificationsAsync } from "../../services/NotificationService";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 // --- CẤU HÌNH API ---
 const API_URL = "http://10.0.2.2:8000"; 
-const USER_ID = 1; 
+
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
 const DAY_LABELS = { Mon: 'T2', Tue: 'T3', Wed: 'T4', Thu: 'T5', Fri: 'T6', Sat: 'T7', Sun: 'CN' } as const;
@@ -50,6 +52,23 @@ type WeeklyPlanType = {
 export default function WeeklyScheduleScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
+// STATE USER
+   const [user, setUser] = useState<any | null>(null);
+
+useEffect(() => {
+  (async () => {
+    try {
+      const data = await AsyncStorage.getItem("user_info");
+      setUser(data ? JSON.parse(data) : null);
+    } catch (e) {
+      console.warn("Failed to load user:", e);
+    }
+  })();
+}, []);
+
+  // STATE DATA
+  const USER_ID = user?.user_id ||1 ;
+//   
   
   const [loading, setLoading] = useState(false);
   const [inventory, setInventory] = useState<ScheduleItem[]>([]); // Kho để user chọn thêm
@@ -156,15 +175,75 @@ export default function WeeklyScheduleScreen() {
   }, [params.planData]);
 
 
-  // --- 2. HÀM LƯU LỊCH (GỌI API) ---
+// =================================================================
+  // --- [MỚI - ĐÃ FIX] HÀM TÍNH NGÀY & CHUẨN BỊ DỮ LIỆU ---
+  // =================================================================
+  
+  const getDateForDay = (dayKey: string) => {
+    const today = new Date();
+    // getDay(): 0 = CN, 1 = T2, ..., 6 = T7
+    // Nhưng logic app của bạn: Mon, Tue...
+    const currentDayIndex = today.getDay(); 
+
+    // Map thứ sang số (Lưu ý: Javascript tính CN là 0)
+    const dayMap: { [key: string]: number } = { 
+      'Sun': 0, 'Mon': 1, 'Tue': 2, 'Wed': 3, 'Thu': 4, 'Fri': 5, 'Sat': 6 
+    };
+
+    const targetDayIndex = dayMap[dayKey];
+    
+    // Tính khoảng cách ngày để ra ngày trong tuần hiện tại
+    // Ví dụ: Hôm nay Thứ 4 (3), target Thứ 6 (5) -> Distance = 2 -> Ngày = Hôm nay + 2
+    const distance = targetDayIndex - currentDayIndex;
+    
+    const targetDate = new Date(today);
+    targetDate.setDate(today.getDate() + distance);
+
+    // Format YYYY-MM-DD
+    return targetDate.toISOString().split('T')[0];
+  };
+
+  const prepareNotificationData = () => {
+    const flatList: any[] = [];
+    
+    // Duyệt qua các key trong weeklyPlan (Mon, Tue...)
+    (Object.keys(weeklyPlan) as DayKey[]).forEach((dayKey) => {
+      const items = weeklyPlan[dayKey];
+      
+      if (items && items.length > 0) {
+        const dateString = getDateForDay(dayKey);
+
+        items.forEach(item => {
+          flatList.push({
+            name: item.title,
+            // Map 'workout' -> 'exercise' để khớp với logic bên Service
+            type: item.type === 'workout' ? 'exercise' : 'food', 
+            date: dateString,
+            // Đảm bảo giờ có format HH:mm:ss hoặc HH:mm
+            notify_time: item.time.includes(':') && item.time.length === 5 ? item.time + ":00" : item.time
+          });
+        });
+      }
+    });
+    return flatList;
+  };
+
+  // =================================================================
+  // --- [ĐÃ SỬA] HÀM LƯU DATABASE & ĐẶT BÁO THỨC ---
+  // =================================================================
   const handleSaveToDatabase = async () => {
       setLoading(true);
       try {
-          // Chuẩn bị payload để gửi lên Server
-          // Ta gửi nguyên cục state weeklyPlan (JSON) để lưu vào cột plan_data
+          // 1. Xin quyền thông báo (Quan trọng)
+          const hasPermission = await registerForPushNotificationsAsync();
+          if (!hasPermission) {
+             console.log("Người dùng từ chối quyền thông báo");
+          }
+
+          // 2. Gọi API Lưu DB
           const payload = {
               user_id: USER_ID,
-              plan_data: weeklyPlan // Lưu y nguyên cấu trúc UI để sau này load lên cho dễ
+              plan_data: weeklyPlan
           };
 
           const response = await fetch(`${API_URL}/api/plan/save`, {
@@ -178,13 +257,25 @@ export default function WeeklyScheduleScreen() {
           if (resJson.error) {
               Alert.alert("Lỗi lưu trữ", resJson.error);
           } else {
-              Alert.alert("Thành công", "Lịch trình của bạn đã được lưu!", [
-                  { text: "OK", onPress: () => router.replace("/(home)/CalendarScreen") } // Về trang chủ
-              ]);
+              // 3. NẾU LƯU THÀNH CÔNG -> ĐẶT BÁO THỨC
+              try {
+                const notificationItems = prepareNotificationData();
+                console.log("Items để đặt báo thức:", notificationItems.length);
+                
+                await scheduleWeeklyPlan(notificationItems);
+                
+                Alert.alert("Thành công", "Đã lưu lịch và cài đặt nhắc nhở!", [
+                    { text: "OK", onPress: () => router.replace("/(home)/CalendarScreen") }
+                ]);
+              } catch (notifyError) {
+                console.log("Lỗi đặt báo thức:", notifyError);
+                // Vẫn cho user qua, nhưng báo lỗi log
+                Alert.alert("Thành công", "Đã lưu lịch (nhưng lỗi cài đặt nhắc nhở).");
+              }
           }
 
       } catch (error) {
-          console.error(error);
+          console.error("Lỗi mạng:", error);
           Alert.alert("Lỗi mạng", "Không thể kết nối đến máy chủ.");
       } finally {
           setLoading(false);
