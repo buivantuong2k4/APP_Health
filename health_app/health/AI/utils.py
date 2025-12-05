@@ -21,8 +21,8 @@ def map_bmi_to_exercise_needs(bmi, goal):
     bmi = float(bmi or 22)
     if bmi < 18.5: desired_cal = 150
     elif bmi < 25: desired_cal = 250
-    elif bmi < 30: desired_cal = 350
-    else: desired_cal = 500
+    elif bmi < 30: desired_cal = 300
+    else: desired_cal = 350
     
     if goal == 1: preferred_type = 'cardio'
     elif goal == 2: preferred_type = 'strength'

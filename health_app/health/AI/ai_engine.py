@@ -5,6 +5,7 @@ from datetime import date, timedelta
 from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.metrics.pairwise import cosine_similarity
+import uuid
 
 # --- [SỬA ĐOẠN NÀY] ---
 # Dùng dấu chấm (.) để import file cùng thư mục
@@ -20,7 +21,7 @@ class HealthRecommender:
         self.food_preprocessor = None
         self.ex_matrix = None
         self.food_matrix = None
-
+    # Load dữ liệu bài tập và món ăn từ DB rồi chuẩn hóa/mã hóa để tạo ma trận phục vụ gợi ý
     def load_data(self):
         print(">> Đang tải dữ liệu Knowledge Base...")
         # 1. Load Exercises  
@@ -47,6 +48,7 @@ class HealthRecommender:
         print(">> Hoàn tất tải dữ liệu.")
 
     # --- CÁC HÀM HELPER SINH LÝ DO ---
+    # lý do theo điểm tương đồng và mục tiêu
     def _generate_explanation(self, item_type, row, user_goal):
         reasons = []
         if row.get('similarity', 0) > 0.90: reasons.append("Rất phù hợp hồ sơ")
@@ -65,7 +67,7 @@ class HealthRecommender:
 
         if not reasons: return "Gợi ý phù hợp."
         return " • ".join(reasons)
-
+#   lý do vì thích (mới thêm)
     def _generate_explanation_v2(self, item_type, row, user_goal, pref_status):
         reasons = []
         if pref_status == 'like': reasons.append("Bạn đã Thích")
@@ -73,11 +75,9 @@ class HealthRecommender:
         reasons.append(base_reason)
         return " • ".join(reasons)
 
-    # --- [CẬP NHẬT] LOGIC HỌC TỪ ID KẾ HOẠCH CŨ (CHÍNH XÁC HƠN) ---
+   # Phân tích mức độ hoàn thành plan gần nhất của user để scale độ khó (tăng/giảm) cho gợi ý mới
     def _analyze_past_performance(self, user_id):
-        """
-        Tìm kế hoạch gần nhất trong bảng 'weekly_plans' và tính điểm dựa trên tracking của nó.
-        """
+       
         # 1. Tìm ID của plan gần nhất
         query_plan = "SELECT id FROM analysis_weeklyplans WHERE user_id_id = %s ORDER BY created_at DESC LIMIT 1"
         last_plan = get_data_from_db(query_plan, (user_id,), single_row=True)
@@ -88,7 +88,7 @@ class HealthRecommender:
 
         plan_id = last_plan['id']
 
-        # 2. Tính toán dựa trên tracking của Plan ID đó
+        # 2. Tính toán dựa trên bảng  tracking của Plan ID đó
         query_tracking = """
             SELECT COUNT(*) as total, SUM(is_completed) as completed 
             FROM analysis_plantracking 
@@ -98,7 +98,7 @@ class HealthRecommender:
         
         if not data or data['total'] == 0:
             return 1.0 
-            
+            # tính mức độ hoàn thành lịch của tuần trước đó
         completed = float(data['completed'] or 0)
         total = float(data['total'])
         rate = completed / total
@@ -109,75 +109,7 @@ class HealthRecommender:
         if rate <= 0.4: return 0.8  # Giảm độ khó
         return 1.0
 
-    # --- LOGIC TÍNH TOÁN THÔNG SỐ AN TOÀN ---
-    def _calculate_safe_params(self, exercise_type, base_cal, difficulty_factor, user_goal):
-        safe_factor = max(0.8, min(difficulty_factor, 1.2))
-        adjusted_cal = int(base_cal * safe_factor)
-        param_info = ""
-
-        # CARDIO
-        if exercise_type == 'cardio':
-            base_time = 20 
-            if user_goal == 2: base_time = 15
-            new_time = int(base_time * safe_factor)
-            final_time = max(10, min(new_time, 45)) # Kẹp 10-45p
-            
-            if final_time >= 40: param_info = f"{final_time} phút (Max)"
-            else: param_info = f"{final_time} phút"
-
-        # STRENGTH
-        elif exercise_type == 'strength':
-            base_reps = 12
-            if user_goal == 1: # Giảm cân
-                new_reps = int(base_reps * safe_factor)
-                final_reps = max(10, min(new_reps, 15))
-                final_sets = 3
-            elif user_goal == 2: # Tăng cơ
-                if safe_factor > 1.05: 
-                    final_sets, final_reps = 4, 10
-                else: 
-                    final_sets = 3
-                    final_reps = max(8, min(int(12*safe_factor), 12))
-            else: # Duy trì
-                final_sets, final_reps = 3, 12
-            param_info = f"{final_sets} hiệp x {final_reps} lần"
-        else:
-            param_info = f"{15 if safe_factor < 1 else 20} phút"
-
-        return param_info, adjusted_cal
-
-    # --- GỢI Ý BÀI TẬP ---
-    def recommend_exercises(self, user_id, top_k=5):
-        user = get_data_from_db("SELECT u.date_of_birth, h.* FROM accounts_account u JOIN analysis_healthmetric h ON u.user_id = h.user_id WHERE u.user_id = %s", (user_id,), single_row=True)
-        if not user or self.ex_df is None: return pd.DataFrame()
-
-        prefs_data = get_data_from_db("SELECT exercise_id, preference_type FROM preferences_userexercisepreferences WHERE user_id_id" \
-        " = %s", (user_id,))
-        user_prefs = {row['exercise_id']: row['preference_type'] for _, row in prefs_data.iterrows()} if prefs_data is not None else {}
-# chọn calo tiêu hao và dạng bài tập phù hợp 
-        desired_cal, preferred_type = map_bmi_to_exercise_needs(user['bmi'], user['goal'])
-        # kế hoạch lý tưởng
-        user_input_df = pd.DataFrame([{'intensity': user['activity_level'], 'calories_burn_30min': desired_cal, 'type': preferred_type, 'target_goal': user['goal']}])
-        
-        user_vec = self.ex_preprocessor.transform(user_input_df)
-        sim_scores = cosine_similarity(user_vec, self.ex_matrix)[0]
-
-        temp_df = self.ex_df.copy()
-        temp_df['base_similarity'] = sim_scores
-        
-        def adjust_score(row):
-            score = row['base_similarity']
-            status = user_prefs.get(row['id'])
-            if status == 'like': score += 0.20
-            elif status == 'dislike': score -= 0.50
-            return score
-        temp_df['final_score'] = temp_df.apply(adjust_score, axis=1)
-        temp_df = temp_df.sort_values(by='final_score', ascending=False)
-
-        filtered_df = self._filter_exercises_by_rules(user, temp_df).head(top_k).copy()
-        filtered_df['reason'] = filtered_df.apply(lambda row: self._generate_explanation_v2('exercise', row, user['goal'], user_prefs.get(row['id'])), axis=1)
-        return filtered_df
-
+   # Lọc danh sách bài tập theo các rule an toàn (tuổi, bệnh lý, nhịp tim, giấc ngủ) để loại bỏ bài tập rủi ro
     def _filter_exercises_by_rules(self, user, df):
         dob = user.get('date_of_birth') 
         age = calculate_age(dob)
@@ -198,7 +130,7 @@ class HealthRecommender:
             if is_safe: valid_indices.append(idx)
         return df.loc[valid_indices]
 
-    # --- GỢI Ý MÓN ĂN ---
+    # Gợi ý danh sách món ăn Top K cho user dựa trên calo mục tiêu, sở thích, bệnh lý và độ tương đồng món
     def recommend_foods(self, user_id, meal_type=None, min_cal=None, max_cal=None, top_k=5):
         # 1. Lấy thông tin User
         user = get_data_from_db("SELECT h.*, h.has_diabetes, h.has_hypertension FROM analysis_healthmetric h WHERE h.user_id = %s", (user_id,), single_row=True)
@@ -215,9 +147,9 @@ class HealthRecommender:
             target_input_cal = (min_cal + max_cal) / 2
         else:
             # Nếu không truyền vào (chạy mặc định), lấy theo goal chung
-            target_input_cal, _ = map_goal_to_food_needs(user['goal'])
+            target_input_cal = 600
         
-        _, preferred_type = map_goal_to_food_needs(user['goal'])
+        preferred_type = map_goal_to_food_needs(user['goal'])
 
         # Tạo vector input dựa trên nhu cầu cụ thể của bữa ăn này
         user_input_df = pd.DataFrame([{
@@ -269,6 +201,8 @@ class HealthRecommender:
         filtered_df['reason'] = filtered_df.apply(lambda row: self._generate_explanation_v2('food', row, user['goal'], user_prefs.get(row['id'])), axis=1)
         
         return filtered_df
+    
+    # Lọc món ăn theo bệnh lý & mục tiêu (tiểu đường, huyết áp, calo tối đa cho giảm cân)
     def _filter_foods_by_rules(self, user, df):
         has_diabetes = user.get('has_diabetes', 0)
         has_hypertension = user.get('has_hypertension', 0)
@@ -283,214 +217,204 @@ class HealthRecommender:
             if is_safe: valid_indices.append(idx)
         return df.loc[valid_indices]
 
-    # --- LẬP LỊCH TUẦN ---
-    def generate_weekly_meal_plan(self, user_id):
-        # ---------------------------------------------------------
-        # 1. KHỞI TẠO & TÍNH TOÁN TARGET
-        # ---------------------------------------------------------
-        days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+  
+    # Sinh lịch tập 7 ngày cho user, ưu tiên bài đã chọn, auto-fill thêm và phân bổ bài để gần đạt mục tiêu calo/ngày
+    def generate_weekly_exercise_plan(self, user_id, start_date=None, selected_ex_ids=None):
+        """
+        Sinh kế hoạch tập 7 ngày.
 
-        user = get_data_from_db("SELECT h.* FROM analysis_healthmetric h WHERE h.user_id = %s", (user_id,), single_row=True)
-        if not user or self.food_df is None: return pd.DataFrame()
-        
-        age = calculate_age(user.get('date_of_birth'))
-        target_calories = calculate_daily_calories(
-            user.get('height_cm'), user.get('weight_kg'), age, 
-            user.get('gender'), user.get('activity_level'), user.get('goal')
+        - Nếu selected_ex_ids có dữ liệu: ưu tiên dùng bài user đã chọn.
+        - Nếu selected_ex_ids ít hoặc rỗng: tự động lấy thêm bài phù hợp từ DB.
+        - Mỗi ngày cố gắng đốt ≈ target_ex_cal (calo tiêu hao mục tiêu).
+        """
+
+        # --------------------------------------------------
+        # 1. LẤY THÔNG TIN USER
+        # --------------------------------------------------
+        user = get_data_from_db(
+            """
+            SELECT u.date_of_birth, h.* 
+            FROM accounts_account u 
+            JOIN analysis_healthmetric h ON u.user_id = h.user_id 
+            WHERE u.user_id = %s
+            """,
+            (user_id,),
+            single_row=True
         )
-        
-        # Tỷ lệ phân bổ: Trưa chiếm ~57% phần năng lượng còn lại (sau sáng)
-        ratio_trua_toi = 0.57 
+        if not user:
+            return {}
 
-        # ---------------------------------------------------------
-        # 2. CHUẨN BỊ DỮ LIỆU (PRE-FETCH POOLS)
-        # ---------------------------------------------------------
-        
-        # A. Pool Bữa Sáng: (20% - 35% Calo ngày)
-        pool_sang = self.recommend_foods(
-            user_id, 
-            meal_type='sang', 
-            min_cal=target_calories * 0.20, 
-            max_cal=target_calories * 0.35, 
-            top_k=20 
-        ).to_dict('records')
+        # --------------------------------------------------
+        # 2. XÁC ĐỊNH TARGET CALO TIÊU HAO / NGÀY
+        #    (SỬA TÊN CỘT CHO KHỚP DB CỦA BẠN)
+        # --------------------------------------------------
+        target_ex_cal = (
+            user.get('daily_burn')  # nếu bạn có cột này
+          
+        )
 
-        # B. Pool Bữa Chính (Trộn giữa Diet và Energy để đủ calo)
-        
-        # B1. Nhóm Diet (Nhẹ nhàng: 200 - 500 kcal)
-        pool_diet = self.recommend_foods(
-            user_id, meal_type='trua,toi', 
-            min_cal=200, max_cal=500, top_k=30
-        ).to_dict('records')
+        if not target_ex_cal:
+            # Nếu không có cột riêng -> lấy khoảng 25–30% tổng calo/ngày
+            daily_calo = user.get('daily_calo') or user.get('target_calories')
+            if daily_calo:
+                target_ex_cal = int(float(daily_calo) * 0.3)
+            else:
+                target_ex_cal = 300
 
-        # B2. Nhóm Energy (Năng lượng cao: 501 - 1200 kcal) -> QUAN TRỌNG ĐỂ KHÔNG BỊ HỤT CALO
-        pool_energy = self.recommend_foods(
-            user_id, meal_type='trua,toi', 
-            min_cal=501, max_cal=1200, top_k=30
-        ).to_dict('records')
+        target_ex_cal = int(target_ex_cal)
 
-        # B3. Trộn và Shuffle
-        pool_main = pool_diet + pool_energy
-        random.shuffle(pool_main)
+        # --------------------------------------------------
+        # 3. NGÀY BẮT ĐẦU + HỆ SỐ ĐỘ KHÓ
+        # --------------------------------------------------
+        if start_date is None:
+            start_date = date.today() + timedelta(days=1)
 
-        weekly_plan = {}
-        used_foods = set()
-
-        # ---------------------------------------------------------
-        # 3. HÀM TÌM MÓN THÔNG MINH (SMART FINDER)
-        # ---------------------------------------------------------
-        def find_smart_meal(pool, target_val):
-            """
-            Logic: Ưu tiên món chưa ăn (Unique). 
-            Nhưng nếu món chưa ăn lệch target quá 150kcal, 
-            thì xem xét quay lại ăn món cũ (Repeat) nếu nó khớp hơn.
-            """
-            # Tìm ứng viên trong nhóm CHƯA ĂN
-            candidates_unique = [m for m in pool if m['id'] not in used_foods]
-            best_unique = None
-            if candidates_unique:
-                best_unique = min(candidates_unique, key=lambda x: abs(x.get('calories', 0) - target_val))
-
-            # Tìm ứng viên trong TOÀN BỘ POOL (Bao gồm đã ăn)
-            best_any = min(pool, key=lambda x: abs(x.get('calories', 0) - target_val)) if pool else None
-
-            if not best_unique: return best_any # Hết món mới -> Bắt buộc ăn lại
-            if not best_any: return None # Pool rỗng
-
-            # QUYẾT ĐỊNH:
-            threshold = 150 # Ngưỡng chấp nhận sai số (kcal)
-            diff_unique = abs(best_unique.get('calories', 0) - target_val)
-            diff_any = abs(best_any.get('calories', 0) - target_val)
-
-            # Nếu món mới đủ tốt (sai số < 150) -> Chọn món mới
-            if diff_unique <= threshold:
-                return best_unique
-            
-            # Nếu món mới quá tệ, mà món cũ khớp hơn hẳn (> 50kcal) -> Chọn món cũ
-            if diff_any < diff_unique - 50:
-                return best_any
-            
-            return best_unique
-
-        # ---------------------------------------------------------
-        # 4. VÒNG LẶP XẾP LỊCH (DYNAMIC COMPENSATION)
-        # ---------------------------------------------------------
-        for day in days:
-            try:
-                # --- BƯỚC 1: BỮA SÁNG ---
-                valid_breakfasts = [m for m in pool_sang if m['id'] not in used_foods]
-                # Nếu hết món sáng mới -> Reset pool sáng (cho phép lặp lại)
-                if not valid_breakfasts: valid_breakfasts = pool_sang 
-                
-                m_sang = random.choice(valid_breakfasts) if valid_breakfasts else None
-                if m_sang: used_foods.add(m_sang['id'])
-                cal_sang = m_sang.get('calories', 0) if m_sang else 0
-
-                # --- BƯỚC 2: TÍNH TOÁN DƯ ---
-                remaining_cal = target_calories - cal_sang
-
-                # --- BƯỚC 3: BỮA TRƯA (TỪ POOL MAIN) ---
-                target_trua = remaining_cal * ratio_trua_toi 
-                m_trua = find_smart_meal(pool_main, target_trua)
-                
-                if m_trua: 
-                    used_foods.add(m_trua['id'])
-                    cal_trua = m_trua.get('calories', 0)
-                else: 
-                    cal_trua = 0
-
-                # --- BƯỚC 4: BỮA TỐI (TỪ POOL MAIN) ---
-                target_toi = target_calories - cal_sang - cal_trua
-                
-                # Safety Clamp: Kẹp biên an toàn cho bữa tối
-                # Không ép ăn tối quá ít (<200) hoặc quá nhiều (>900)
-                if target_toi < 200: target_toi = 200
-                if target_toi > 900: target_toi = 900
-
-                m_toi = find_smart_meal(pool_main, target_toi)
-                
-                if m_toi: 
-                    used_foods.add(m_toi['id'])
-                    cal_toi = m_toi.get('calories', 0)
-                else: 
-                    cal_toi = 0
-
-                # --- LƯU KẾT QUẢ ---
-                if m_sang and m_trua and m_toi:
-                    total_cal = cal_sang + cal_trua + cal_toi
-                    
-                    weekly_plan[day] = {
-                        "total_calories": int(total_cal),
-                        "target_calories": int(target_calories),
-                        "diff": int(total_cal - target_calories),
-                        "breakfast": {
-                            "id": m_sang['id'], "name": m_sang['name'], "cal": int(cal_sang)
-                        },
-                        "lunch": {
-                            "id": m_trua['id'], "name": m_trua['name'], "cal": int(cal_trua)
-                        },
-                        "dinner": {
-                            "id": m_toi['id'], "name": m_toi['name'], "cal": int(cal_toi)
-                        }
-                    }
-                else:
-                    weekly_plan[day] = {"error": "Không tìm thấy món ăn phù hợp"}
-
-            except Exception as e:
-                print(f"Error generating plan for {day}: {e}")
-                weekly_plan[day] = {"error": "Lỗi hệ thống"}
-
-        return weekly_plan
-   
-    # --- [CẬP NHẬT] TẠO LỊCH TẬP (CÓ NGÀY THÁNG CỤ THỂ) ---
-    def generate_weekly_exercise_plan(self, user_id, start_date=None):
-        user = get_data_from_db("SELECT u.date_of_birth, h.* FROM accounts_account u JOIN analysis_healthmetric h ON u.user_id = h.user_id WHERE u.user_id = %s", (user_id,), single_row=True)
-        if not user: return {}
-
-        # Xử lý ngày bắt đầu
-        if start_date is None: start_date = date.today() + timedelta(days=1)
-        
-        # Tính toán Adaptive
         difficulty_factor = self._analyze_past_performance(user_id)
-        print(f">> [PLANNING] Bắt đầu: {start_date} | Hệ số: {difficulty_factor}")
-
-        goal = user.get('goal', 1)
-        if goal == 2:   pattern = ['Strength', 'Strength', 'Cardio', 'Strength', 'Strength', 'Cardio', 'Yoga']
-        elif goal == 1: pattern = ['Cardio', 'Strength', 'Cardio', 'Cardio', 'Strength', 'Cardio', 'Yoga']
-        else:           pattern = ['Cardio', 'Strength', 'Cardio', 'Strength', 'Cardio', 'Yoga', 'Rest']
+        print(f"[EX-PLAN] start={start_date} | factor={difficulty_factor} | target_ex_cal={target_ex_cal}")
 
         days_map = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
         weekly_ex_plan = {}
 
+        # --------------------------------------------------
+        # 4. HÀM PHỤ SCALE THỜI GIAN ĐỂ FIT CALO
+        # --------------------------------------------------
+        def scale_duration(cal_30, target_cal, min_min=5, max_min=60):
+            """
+            cal_30: calo/30 phút
+            target_cal: muốn đốt bao nhiêu cal
+            -> trả về (duration_phút, calo_thực_tế)
+            """
+            if cal_30 <= 0 or target_cal <= 0:
+                return 0, 0
+            raw_duration = 30.0 * (float(target_cal) / float(cal_30))
+            raw_duration = max(min_min, min(max_min, raw_duration))
+            scaled_cal = int(cal_30 * (raw_duration / 30.0))
+            return round(raw_duration, 1), scaled_cal
+
+        # --------------------------------------------------
+        # 5. LẤY POOL BÀI TẬP TỪ USER CHỌN + AUTO-FILL NẾU THIẾU
+        # --------------------------------------------------
+        pool_ex = []
+
+        # 5.1. Lấy từ selected_ex_ids (bài user chọn)
+        if selected_ex_ids:
+            ex_ids = [eid for eid in selected_ex_ids if str(eid).isdigit()]
+            if ex_ids:
+                ids_str = ",".join(map(str, ex_ids))
+                ex_df = get_data_from_db(
+                    f"SELECT * FROM preferences_exercise WHERE id IN ({ids_str})"
+                )
+                if ex_df is not None and not ex_df.empty:
+                    pool_ex = ex_df.to_dict('records')
+
+        # 5.2. Nếu user không chọn gì HOẶC chọn quá ít -> tự gợi ý thêm theo goal
+        MIN_EX = 5  # tối thiểu 5 bài để xoay tua
+
+        if len(pool_ex) < MIN_EX:
+            needed = MIN_EX - len(pool_ex)
+            print(f"[EX-PLAN] User chọn {len(pool_ex)} bài. Auto-fill thêm {needed} bài...")
+
+            # Lấy goal để chọn loại bài phù hợp
+            goal = user.get('goal', 1)
+            if goal == 1:       # Giảm cân: ưu tiên Cardio, rồi Strength
+                preferred_types = ['Cardio', 'Strength']
+            elif goal == 2:     # Tăng cơ: ưu tiên Strength, rồi Cardio
+                preferred_types = ['Strength', 'Cardio']
+            else:               # Duy trì / thư giãn: Cardio + Yoga
+                preferred_types = ['Cardio', 'Yoga']
+
+            more_ex = []
+            for ex_type in preferred_types:
+                rec_df = self._recommend_exercises_by_type(
+                    user=user,
+                    ex_type=ex_type,
+                    top_k=needed * 3,
+                    override_level=None
+                )
+                if rec_df is not None and not rec_df.empty:
+                    more_ex.extend(rec_df.to_dict('records'))
+
+            # Gộp lại, tránh trùng id
+            existing_ids = {int(ex['id']) for ex in pool_ex if str(ex.get('id', '')).isdigit()}
+            for ex in more_ex:
+                try:
+                    ex_id = int(ex['id'])
+                except:
+                    continue
+                if ex_id not in existing_ids:
+                    pool_ex.append(ex)
+                    existing_ids.add(ex_id)
+                if len(pool_ex) >= MIN_EX:
+                    break
+
+        # Nếu vẫn rỗng -> chịu, không có bài để xếp
+        if not pool_ex:
+            print("[EX-PLAN] Không có bài tập nào (sau khi auto-fill).")
+            return {}
+
+        # --------------------------------------------------
+        # 6. VÒNG LẶP 7 NGÀY
+        # --------------------------------------------------
         for i in range(7):
             current_date = start_date + timedelta(days=i)
             date_str = current_date.strftime("%Y-%m-%d")
             day_name = days_map[i]
-            day_type = pattern[i]
 
-            if day_type == 'Rest':
-                weekly_ex_plan[day_name] = {"date": date_str, "type": "Nghỉ ngơi", "exercises": []}
-                continue
-
-            exercises = self._recommend_exercises_by_type(user, day_type, top_k=3, override_level=None)
+            remaining = target_ex_cal
             ex_list = []
-            if not exercises.empty:
-                for _, row in exercises.iterrows():
-                    sets_info, adj_cal = self._calculate_safe_params(
-                        row['type'], int(row['calories_burn_30min']), difficulty_factor, goal
-                    )
-                    # Lưu ID bài tập để tracking
-                    ex_list.append({
-                        "id": int(row['id']), 
-                        "name": row['name'], 
-                        "sets": sets_info, 
-                        "cal": adj_cal
-                    })
-            
-            weekly_ex_plan[day_name] = {"date": date_str, "type": day_type, "exercises": ex_list}
-            
+
+            # Xào lại thứ tự bài tập cho ngày đó
+            day_pool = pool_ex[:]
+            random.shuffle(day_pool)
+
+            # ------- GHÉP BÀI TẬP ĐỂ GẦN ĐỦ target_ex_cal -------
+            for ex in day_pool:
+                if remaining <= 20:   # còn quá ít calo -> không nhét thêm
+                    break
+
+                cal_30 = int(ex.get('calories_burn_30min', 0) or 0)
+                if cal_30 <= 0:
+                    continue
+
+                # tăng/giảm nhẹ theo difficulty_factor
+                effective_target = int(remaining * difficulty_factor)
+
+                if cal_30 <= effective_target:
+                    # bài này không quá lớn -> cho tập full 30 phút
+                    duration_min = 30
+                    ex_cal = cal_30
+                else:
+                    # bài này khá lớn -> scale thời gian để fit phần calo còn thiếu
+                    duration_min, ex_cal = scale_duration(cal_30, remaining)
+
+                if ex_cal <= 10:
+                    continue
+
+                ex_list.append({
+                    "id": int(ex['id']),
+                    "name": ex['name'],
+                    "type": ex.get('type', 'Workout'),
+                    "duration_min": duration_min,
+                    "cal": int(ex_cal)
+                })
+
+                remaining -= ex_cal
+
+            total_cal_day = target_ex_cal - remaining
+            diff_day = total_cal_day - target_ex_cal
+
+            weekly_ex_plan[day_name] = {
+                "date": date_str,
+                "type": "Workout",          # đơn giản: ngày nào cũng là ngày tập
+                "target_cal": int(target_ex_cal),
+                "total_cal": int(total_cal_day),
+                "diff": int(diff_day),
+                "exercises": ex_list
+            }
+
         return weekly_ex_plan
 
+# Gợi ý Top K bài tập theo loại bằng cách kết hợp lọc an toàn, AI similarity và sở thích + trình độ của user
     def _recommend_exercises_by_type(self, user, ex_type, top_k=3, override_level=None):
         """
         Gợi ý bài tập theo loại (Hybrid): Kết hợp Lọc cứng, AI Similarity và Sở thích cá nhân.
@@ -543,12 +467,12 @@ class HealthRecommender:
         # ---------------------------------------------------------
         # Lấy lịch sử Like/Dislike từ DB
         prefs_data = get_data_from_db(
-            "SELECT exercise_id, preference_type FROM preferences_userexercisepreferences WHERE user_id_id = %s", 
+            "SELECT exercise_id_id, preference_type FROM preferences_userexercisepreferences WHERE user_id_id = %s", 
             (user['id'],)
         )
         user_prefs = {}
         if prefs_data is not None and not prefs_data.empty:
-            user_prefs = {row['exercise_id']: row['preference_type'] for _, row in prefs_data.iterrows()}
+            user_prefs = {row['exercise_id_id']: row['preference_type'] for _, row in prefs_data.iterrows()}
 
         target_level = override_level if override_level else user.get('activity_level', 2)
 
@@ -578,183 +502,370 @@ class HealthRecommender:
         # ---------------------------------------------------------
         # Trả về Top K bài có điểm cao nhất
         return safe.sort_values('hybrid_score', ascending=False).head(top_k)
-    def get_full_user_schedule(self, user_id, start_date=None):
-        return {
-            "meal_plan": self.generate_weekly_meal_plan(user_id),
-            "workout_plan": self.generate_weekly_exercise_plan(user_id, start_date)
-        }
+   
     
-    # [FILE: ai_engine.py]
-
-    # ... (Giữ nguyên các code cũ) ...
-
-    def get_selection_options(self, user_id):
-        """
-        Trả về danh sách các món ăn và bài tập tốt nhất cho User này.
-        Dùng để hiển thị ở màn hình "Chọn món" trước khi tạo lịch.
-        """
+    # Chuẩn bị danh sách món sáng, món chính và bài tập gợi ý theo calo/mục tiêu để user chọn trước khi tạo lịch
+    def get_selection_options(self, user_id: int) -> dict:
+  
         # 1. Lấy thông tin User
-        user = get_data_from_db("SELECT h.* FROM analysis_healthmetric h WHERE h.user_id = %s", (user_id,), single_row=True)
-        if not user: return {}
+        user = get_data_from_db(
+            "SELECT h.* FROM analysis_healthmetric h WHERE h.user_id = %s",
+            (user_id,),
+            single_row=True
+        )
+        if not user:
+            return {}
 
-        # 2. Gợi ý Món Sáng (Lấy top 10 món tốt nhất)
-        # map_goal_to_food_needs giúp định hình loại món (diet/muscle...)
-        df_sang = self.recommend_foods(user_id, meal_type='sang', top_k=10)
-        print(f">> Gợi ý món sáng cho User #{user_id}: {len(df_sang)} món")
+        # Lấy daily_calo theo kiểu dict
+        target_calories = user.get('daily_calo') or user.get('daily_calo'.upper()) or user.get('daily_calo'.lower())
+        if not target_calories:
+            # Không có thông tin calo -> không gợi ý được hợp lý
+            target_calories = 2000  # fallback mặc định
+
+        # ---------------------------------------------------------
+        # 2. CHUẨN BỊ NGƯỠNG CALO KHOA HỌC HƠN
+        # ---------------------------------------------------------
+
+        # Bữa sáng ~ 20% - 30% tổng calo
+        breakfast_min = target_calories * 0.20
+        breakfast_max = target_calories * 0.30
+
+        # Giả sử còn lại cho 2 bữa chính (trưa + tối)
+        remaining_for_main = target_calories - ((breakfast_min + breakfast_max) / 2)
+        per_main_meal = max(remaining_for_main / 2, 400)  # tối thiểu 400 kcal / bữa cho hợp lý
+
+        # Nhóm "diet" (nhẹ) cho bữa chính: 60% - 90% calo một bữa chính
+        main_diet_min = per_main_meal * 0.60
+        main_diet_max = per_main_meal * 0.90
+
+        # Nhóm "energy" (cao năng lượng): 90% - 130% calo một bữa chính
+        main_energy_min = per_main_meal * 0.90
+        main_energy_max = per_main_meal * 1.30
+
+        # ---------------------------------------------------------
+        # 3. CHUẨN BỊ POOL MÓN ĂN
+        # ---------------------------------------------------------
+
+        # A. Pool Bữa Sáng
+        df_sang = self.recommend_foods(
+            user_id=user_id,
+            meal_type='sang',
+            min_cal=breakfast_min,
+            max_cal=breakfast_max,
+            top_k=20
+        )
         list_sang = df_sang.to_dict('records') if not df_sang.empty else []
 
-        # 3. Gợi ý Món Chính (Trưa/Tối) (Lấy top 20 món)
-        df_chinh = self.recommend_foods(user_id, meal_type='trua,toi', top_k=20)
-        list_chinh = df_chinh.to_dict('records') if not df_chinh.empty else []
+        # B. Pool Bữa Chính (Trưa/Tối)
+        # B1. Nhóm Diet (Nhẹ)
+        df_diet = self.recommend_foods(
+            user_id=user_id,
+            meal_type='trua,toi',
+            min_cal=main_diet_min,
+            max_cal=main_diet_max,
+            top_k=30
+        )
 
-        # 4. Gợi ý Bài tập (Lấy top 10 bài)
-        df_ex = self.recommend_exercises(user_id, top_k=10)
-        list_ex = df_ex.to_dict('records') if not df_ex.empty else []
+        # B2. Nhóm Energy (Cao năng lượng)
+        df_energy = self.recommend_foods(
+            user_id=user_id,
+            meal_type='trua,toi',
+            min_cal=main_energy_min,
+            max_cal=main_energy_max,
+            top_k=30
+        )
 
+        # Ghép hai nhóm lại, bỏ trùng id, ưu tiên final_score cao
+        if df_diet is not None and not df_diet.empty:
+            df_main = df_diet.copy()
+        else:
+            df_main = pd.DataFrame()
+
+        if df_energy is not None and not df_energy.empty:
+            if df_main.empty:
+                df_main = df_energy.copy()
+            else:
+                df_main = pd.concat([df_main, df_energy], ignore_index=True)
+
+        if not df_main.empty:
+            # Bỏ trùng món theo id, giữ món điểm cao hơn
+            df_main = (
+                df_main.sort_values(by='final_score', ascending=False)
+                        .drop_duplicates(subset=['id'])
+            )
+            # Lấy khoảng 30–40 món để user chọn
+            df_main = df_main.head(40)
+            list_chinh = df_main.to_dict('records')
+        else:
+            list_chinh = []
+
+        # ---------------------------------------------------------
+              # ---------------------------------------------------------
+        # 4. GỢI Ý BÀI TẬP
+        # ---------------------------------------------------------
+        goal = user.get('goal', 1)
+
+        # Mapping goal -> các loại bài tập ưu tiên
+        if goal == 1:       # Giảm cân: ưu tiên Cardio, rồi Strength
+            preferred_types = ['Cardio', 'Strength']
+        elif goal == 2:     # Tăng cơ: ưu tiên Strength, rồi Cardio
+            preferred_types = ['Strength', 'Cardio']
+        else:               # Duy trì / thư giãn: Cardio + Yoga
+            preferred_types = ['Cardio', 'Yoga']
+
+        list_ex = []
+
+        for ex_type in preferred_types:
+            df_ex = self._recommend_exercises_by_type(
+                user=user,
+                ex_type=ex_type,
+                top_k= 3,   
+                override_level=None
+            )
+            if df_ex is not None and not df_ex.empty:
+                list_ex.extend(df_ex.to_dict('records'))
+
+       
         return {
             "breakfast_options": list_sang,
             "main_dish_options": list_chinh,
-            "exercise_options": list_ex
+            "exercise_options": list_ex,
         }
+
     
-    # [FILE: ai_engine.py] - Cập nhật logic mới
-
-    # ... (Giữ nguyên các hàm load_data, recommend_foods cũ) ...
-
-    # --- HÀM MỚI: TẠO LỊCH TỪ DANH SÁCH USER CHỌN ---
-    def generate_custom_plan_from_selection(self, user_id, selected_food_ids, selected_ex_ids,custom_items=[]):
-        """
-        Input: 
-            - selected_food_ids: list [1, 5, 10, ...] (User đã tick chọn)
-            - selected_ex_ids: list [20, 25, ...]
-        Output:
-            - Lịch tuần hoàn chỉnh.
-        """
-        # 1. Lấy thông tin User để tính TDEE mục tiêu
-        user = get_data_from_db("SELECT h.*, u.date_of_birth FROM analysis_healthmetric h JOIN accounts_account u ON h.user_id = u.user_id WHERE h.user_id = %s", (user_id,), single_row=True)
-        if not user: return {"error": "User not found"}
-
-        age = calculate_age(user.get('date_of_birth'))
-        target_calories = calculate_daily_calories(
-            user.get('height_cm'), user.get('weight_kg'), age, 
-            user.get('gender'), user.get('activity_level'), user.get('goal')
+   # Tạo plan ăn uống + tập luyện 7 ngày từ danh sách món/bài user chọn (có auto-fill & cân calo thông minh)
+    def generate_custom_plan_from_selection(self, user_id, selected_food_ids, selected_ex_ids, custom_items=[]):
+    
+        # 1. Lấy thông tin User để tính TDEE / daily_calo mục tiêu
+        user = get_data_from_db(
+            "SELECT h.*, u.date_of_birth FROM analysis_healthmetric h "
+            "JOIN accounts_account u ON h.user_id = u.user_id "
+            "WHERE h.user_id = %s",
+            (user_id,),
+            single_row=True
         )
+        if not user:
+            return {"error": "User not found"}
+
+        # Lấy daily_calo
+        target_calories = (
+            user.get('daily_calo')
+            or user.get('DAILY_CALO')
+            or user.get('daily_calo'.lower())
+        )
+        if not target_calories:
+            # Không có thông tin calo -> fallback
+            target_calories = 2000
+
+       
+       
 
         # ==========================================
         # XỬ LÝ PHẦN ĂN UỐNG (MEAL PLAN)
         # ==========================================
-        
-       # A. Lấy món từ DB (như cũ)
+
+        # A. Lấy món từ DB
         pool_foods = []
         if selected_food_ids:
-            ids_str = ','.join(map(str, selected_food_ids))
-            pool_foods = get_data_from_db(f"SELECT * FROM preferences_food WHERE id IN ({ids_str})").to_dict('records')
-        
-        # --- ĐOẠN MỚI THÊM: XỬ LÝ MÓN CUSTOM ---
-        # Biến đổi món custom cho giống cấu trúc món DB để code phía dưới chạy được
-        import uuid
+            # Lưu ý: nếu selected_food_ids có cả string (custom_xxx) thì filter int trước khi query
+            db_ids = [fid for fid in selected_food_ids if str(fid).isdigit()]
+            if db_ids:
+                ids_str = ','.join(map(str, db_ids))
+                pool_foods = get_data_from_db(
+                    f"SELECT * FROM preferences_food WHERE id IN ({ids_str})"
+                ).to_dict('records')
+
+        # --- XỬ LÝ MÓN CUSTOM ---
         for item in custom_items:
-            # Tạo một món "giả" có cấu trúc giống hệt món trong DB
             fake_item = {
-                'id': f"custom_{uuid.uuid4().hex[:8]}", # ID dạng chuỗi: "custom_a1b2c3"
+                'id': f"custom_{uuid.uuid4().hex[:8]}",  # "custom_a1b2c3"
                 'name': item.get('name', 'Món tự chọn'),
                 'calories': int(item.get('cal', 0)),
-                'type': item.get('type', 'lunch'), # 'breakfast' hoặc 'lunch/dinner'
+                'type': item.get('type', 'trua,toi'),  # 'sang' hoặc 'trua,toi'
                 'is_custom': True
             }
             pool_foods.append(fake_item)
-            # Thêm ID giả này vào danh sách "đã chọn" để tí nữa ưu tiên xếp nó
-            selected_food_ids.append(fake_item['id']) 
-        # ---------------------------------------
+            selected_food_ids.append(fake_item['id'])  # ưu tiên món user nhập tay
 
         # B. Phân loại Sáng / Chính
-        pool_sang = [f for f in pool_foods if 'breakfast' in f.get('type', '').lower()]
-        pool_chinh = [f for f in pool_foods if 'breakfast' not in f.get('type', '').lower()]
+        pool_sang = [f for f in pool_foods if 'sang' in f.get('type', '').lower()]
+        pool_chinh = [f for f in pool_foods if 'sang' not in f.get('type', '').lower()]
 
         # C. Auto-fill (AI tự động bù nếu user chọn ít quá)
-        # Quy tắc: Cần ít nhất 3 món sáng và 5 món chính để xoay tua đỡ chán
+        # Cần ít nhất 3 món sáng & 5 món chính để xoay tua
         if len(pool_sang) < 3:
             needed = 3 - len(pool_sang)
             print(f">> User chọn thiếu {needed} món sáng. AI đang tìm thêm...")
-            more_sang = self.recommend_foods(user_id, meal_type='sang', top_k=needed*2)
+            breakfast_min = target_calories * 0.20
+            breakfast_max = target_calories * 0.30
+            more_sang = self.recommend_foods(
+                user_id,
+                meal_type='sang',
+                min_cal=breakfast_min,
+                max_cal=breakfast_max,
+                top_k=needed * 2
+            )
             if not more_sang.empty:
                 pool_sang.extend(more_sang.to_dict('records'))
 
         if len(pool_chinh) < 5:
             needed = 5 - len(pool_chinh)
             print(f">> User chọn thiếu {needed} món chính. AI đang tìm thêm...")
-            more_main = self.recommend_foods(user_id, meal_type='trua,toi', top_k=needed*2)
+            main_energy_min = target_calories * 0.35
+            main_energy_max = target_calories * 0.40
+            more_main = self.recommend_foods(
+                user_id,
+                meal_type='trua,toi',
+                min_cal=main_energy_min,
+                max_cal=main_energy_max,
+                top_k=needed * 2
+            )
             if not more_main.empty:
                 pool_chinh.extend(more_main.to_dict('records'))
 
-        # D. Xếp lịch (Logic: Ưu tiên món User chọn trước)
-        # Đánh dấu món nào là của User chọn để ưu tiên
-        user_picked_ids = set(selected_food_ids)
-        
-        meal_plan = {}
+        # D. Xếp lịch bằng thuật toán "SMART FINDER + DYNAMIC COMPENSATION"
+
         days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-        
-        # Trộn ngẫu nhiên để không bị lặp thứ tự, nhưng lát nữa sẽ ưu tiên pick
-        random.shuffle(pool_sang)
-        random.shuffle(pool_chinh)
+        meal_plan = {}
 
+        # Pool chính cho trưa/tối
+        pool_main = pool_chinh
+
+        # Lưu lại những món đã dùng trong tuần (để hạn chế trùng)
+        used_foods = set()
+
+        # Tỷ lệ phân bổ trưa/tối trên phần calo còn lại sau bữa sáng
+        ratio_trua_toi = 0.6  # ~60% trưa, còn lại tối
+
+        # ---------------------------------------------------------
+        # 3. HÀM TÌM MÓN THÔNG MINH (SMART FINDER)
+        # ---------------------------------------------------------
+        def find_smart_meal(pool, target_val):
+            """
+            Logic: Ưu tiên món chưa ăn (Unique). 
+            Nhưng nếu món chưa ăn lệch target quá 150kcal, 
+            thì xem xét quay lại ăn món cũ (Repeat) nếu nó khớp hơn.
+            """
+            if not pool:
+                return None
+
+            # Tìm ứng viên trong nhóm CHƯA ĂN
+            candidates_unique = [m for m in pool if m['id'] not in used_foods]
+            best_unique = None
+            if candidates_unique:
+                best_unique = min(
+                    candidates_unique,
+                    key=lambda x: abs(x.get('calories', 0) - target_val)
+                )
+
+            # Tìm ứng viên trong TOÀN BỘ POOL (Bao gồm đã ăn)
+            best_any = min(
+                pool,
+                key=lambda x: abs(x.get('calories', 0) - target_val)
+            ) if pool else None
+
+            if not best_unique:
+                # Hết món mới -> Bắt buộc ăn lại
+                return best_any
+            if not best_any:
+                return None
+
+            # QUYẾT ĐỊNH:
+            threshold = 150  # Ngưỡng chấp nhận sai số (kcal)
+            diff_unique = abs(best_unique.get('calories', 0) - target_val)
+            diff_any = abs(best_any.get('calories', 0) - target_val)
+
+            # Nếu món mới đủ tốt (sai số < 150) -> Chọn món mới
+            if diff_unique <= threshold:
+                return best_unique
+
+            # Nếu món mới quá tệ, mà món cũ khớp hơn hẳn (> 50kcal) -> Chọn món cũ
+            if diff_any < diff_unique - 50:
+                return best_any
+
+            return best_unique
+
+        # ---------------------------------------------------------
+        # 4. VÒNG LẶP XẾP LỊCH (DYNAMIC COMPENSATION)
+        # ---------------------------------------------------------
         for day in days:
-            # 1. Chọn bữa sáng
-            # Ưu tiên tìm trong pool món nào User đã pick
-            brk_candidates = sorted(pool_sang, key=lambda x: 0 if x['id'] in user_picked_ids else 1)
-            # Lấy món đầu tiên (ưu tiên user pick) rồi rotate nó xuống cuối danh sách để ngày mai đổi món khác
-            selected_breakfast = brk_candidates[0]
-            pool_sang.append(pool_sang.pop(pool_sang.index(selected_breakfast))) 
-            
-            cal_sang = selected_breakfast['calories']
-            remaining = target_calories - cal_sang
+            try:
+                # --- BƯỚC 1: BỮA SÁNG ---
+                valid_breakfasts = [m for m in pool_sang if m['id'] not in used_foods]
+                # Nếu hết món sáng mới -> cho phép ăn lại
+                if not valid_breakfasts:
+                    valid_breakfasts = pool_sang
 
-            # 2. Chọn bữa trưa & tối (Logic tìm tổng gần bằng remaining)
-            # Tạm thời lấy ngẫu nhiên 2 món trong pool chính sao cho calo vừa đủ
-            best_combo = None
-            min_diff = 9999
+                m_sang = random.choice(valid_breakfasts) if valid_breakfasts else None
+                if m_sang:
+                    used_foods.add(m_sang['id'])
+                    cal_sang = m_sang.get('calories', 0)
+                else:
+                    cal_sang = 0
 
-            # Thử 10 lần ngẫu nhiên để tìm cặp đôi hoàn hảo
-            for _ in range(10):
-                m1 = random.choice(pool_chinh)
-                m2 = random.choice(pool_chinh)
-                if m1['id'] == m2['id']: continue # Không ăn trùng trưa tối
-                
-                total = m1['calories'] + m2['calories']
-                diff = abs(total - remaining)
-                
-                # Ưu tiên combo có món user thích
-                priority_bonus = 0
-                if m1['id'] in user_picked_ids: priority_bonus += 50
-                if m2['id'] in user_picked_ids: priority_bonus += 50
-                
-                # So sánh: Sai số calo thấp nhất (đã trừ điểm ưu tiên)
-                if (diff - priority_bonus) < min_diff:
-                    min_diff = diff - priority_bonus
-                    best_combo = (m1, m2)
-            
-            if best_combo:
-                m_trua, m_toi = best_combo
-            else:
-                # Fallback nếu không tìm ra
-                m_trua, m_toi = pool_chinh[0], pool_chinh[1]
+                # --- BƯỚC 2: TÍNH TOÁN DƯ ---
+                remaining_cal = target_calories - cal_sang
 
-            meal_plan[day] = {
-                "total_calories": int(cal_sang + m_trua['calories'] + m_toi['calories']),
-                "breakfast": {"id": selected_breakfast['id'], "name": selected_breakfast['name'], "cal": selected_breakfast['calories']},
-                "lunch": {"id": m_trua['id'], "name": m_trua['name'], "cal": m_trua['calories']},
-                "dinner": {"id": m_toi['id'], "name": m_toi['name'], "cal": m_toi['calories']},
-            }
+                # --- BƯỚC 3: BỮA TRƯA ---
+                target_trua = remaining_cal * ratio_trua_toi
+                m_trua = find_smart_meal(pool_main, target_trua)
+                if m_trua:
+                    used_foods.add(m_trua['id'])
+                    cal_trua = m_trua.get('calories', 0)
+                else:
+                    cal_trua = 0
+
+                # --- BƯỚC 4: BỮA TỐI ---
+                target_toi = target_calories - cal_sang - cal_trua
+
+                # Kẹp biên cho bữa tối
+                if target_toi < 200:
+                    target_toi = 200
+                if target_toi > 900:
+                    target_toi = 900
+
+                m_toi = find_smart_meal(pool_main, target_toi)
+                if m_toi:
+                    used_foods.add(m_toi['id'])
+                    cal_toi = m_toi.get('calories', 0)
+                else:
+                    cal_toi = 0
+
+                # --- LƯU KẾT QUẢ ---
+                if m_sang and m_trua and m_toi:
+                    total_cal = cal_sang + cal_trua + cal_toi
+                    meal_plan[day] = {
+                        "total_calories": int(total_cal),
+                        "target_calories": int(target_calories),
+                        "diff": int(total_cal - target_calories),
+                        "breakfast": {
+                            "id": m_sang['id'],
+                            "name": m_sang['name'],
+                            "cal": int(cal_sang),
+                        },
+                        "lunch": {
+                            "id": m_trua['id'],
+                            "name": m_trua['name'],
+                            "cal": int(cal_trua),
+                        },
+                        "dinner": {
+                            "id": m_toi['id'],
+                            "name": m_toi['name'],
+                            "cal": int(cal_toi),
+                        },
+                    }
+                else:
+                    meal_plan[day] = {"error": "Không tìm thấy món ăn phù hợp"}
+
+            except Exception as e:
+                print(f"Error generating plan for {day}: {e}")
+                meal_plan[day] = {"error": "Lỗi hệ thống"}
 
         # ==========================================
         # XỬ LÝ PHẦN TẬP LUYỆN (WORKOUT PLAN)
         # ==========================================
-        # Logic tương tự: Lấy bài user chọn -> Fill nếu thiếu -> Xếp vào lịch
-        # (Ở đây mình làm gọn lại để code không quá dài)
-        # Bạn có thể áp dụng logic query WHERE id IN (...) tương tự phần Food
-        
-        # Tạm thời gọi hàm tạo lịch tập cũ (bạn có thể nâng cấp phần này sau)
-        workout_plan = self.generate_weekly_exercise_plan(user_id) 
+        # Tạm thời giữ logic cũ
+        workout_plan = self.generate_weekly_exercise_plan( user_id=user_id,selected_ex_ids=selected_ex_ids)
 
         return {
             "meal_plan": meal_plan,
