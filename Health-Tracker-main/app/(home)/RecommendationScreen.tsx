@@ -1,6 +1,7 @@
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
+import { API_BASE_URL } from "../config/api";
 import {
   ActivityIndicator,
   Alert,
@@ -19,7 +20,7 @@ import { colors } from "../../constants/theme";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 // --- CẤU HÌNH API ---
-const API_URL = "http://10.0.2.2:8000"; 
+const API_URL = API_BASE_URL; 
 
 
 // --- TYPE DEFINITIONS ---

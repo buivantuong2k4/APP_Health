@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import * as ImagePicker from "expo-image-picker";
+import { API_BASE_URL } from "../config/api";
 import { useRouter } from "expo-router";
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -45,7 +46,7 @@ export default function UserProfileScreen() {
   const fetchUserProfile = async () => {
     const token = await AsyncStorage.getItem("auth_token");
 
-    const res = await fetch("http://10.0.2.2:8000/accounts/user_profile/", {
+    const res = await fetch(`${API_BASE_URL}/accounts/user_profile/`, {
       headers: {
         Authorization: `Bearer ${token}`,
       },
@@ -68,7 +69,7 @@ export default function UserProfileScreen() {
   const updateProfile = async (profileData: any) => {
     const token = await AsyncStorage.getItem("auth_token");
     const res = await fetch(
-      "http://10.0.2.2:8000/accounts/update_user_profile/",
+      `${API_BASE_URL}/accounts/update_user_profile/`,
       {
         method: "PUT",
         headers: {

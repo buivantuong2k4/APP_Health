@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import axios from "axios";
+import { API_BASE_URL } from "../config/api";
 import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
@@ -76,7 +77,7 @@ export default function ReportsScreen() {
 
         // URL trùng với API bạn đã viết ở backend
         const res = await axios.get<PlanTrackingReport>(
-          "http://10.0.2.2:8000/analysis/plan_tracking_report/",
+          `${API_BASE_URL}/analysis/plan_tracking_report/`,
           {
             headers: { Authorization: `Bearer ${token}` },
             // params: { range: "7d" }, // nếu phía backend support

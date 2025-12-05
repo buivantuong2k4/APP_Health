@@ -2,6 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
 import { useState } from "react";
+import { API_BASE_URL } from "../config/api";
 import {
   Alert,
   KeyboardAvoidingView,
@@ -39,7 +40,7 @@ export default function ChangePasswordScreen() {
   ) => {
     const token = await AsyncStorage.getItem("auth_token");
 
-    const res = await fetch("http://10.0.2.2:8000/accounts/post_password/", {
+    const res = await fetch(`${API_BASE_URL}/accounts/post_password/`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

@@ -4,6 +4,7 @@ import { useRouter } from "expo-router";
 import * as SecureStore from "expo-secure-store";
 import { useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { API_BASE_URL } from "../config/api";
 
 import {
   Alert,
@@ -102,7 +103,7 @@ export default function RegisterScreen() {
         date_of_birth: dateOfBirth?.toISOString().split("T")[0] || "",
       };
 
-      const API_URL = "http://10.0.2.2:8000/accounts/register/"; // Thay bằng IP nếu cần
+      const API_URL = `${API_BASE_URL}/accounts/register/`; // Thay bằng IP nếu cần
       const response = await axios.post(API_URL, payload, {
         headers: { "Content-Type": "application/json" },
       });

@@ -16,10 +16,12 @@ import {
 } from "react-native";
 import Sidebar from "../../components/Sidebar";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import axios from "axios";
+import { API_BASE_URL } from "../config/api";
 
 
 // --- CẤU HÌNH API ---
-const API_URL = "http://10.0.2.2:8000"; 
+const API_URL = API_BASE_URL; 
  
 
 // --- CẤU HÌNH MÀU SẮC ---
@@ -48,7 +50,7 @@ type Activity = {
     cal: number;
     time: string;
     description?: string;
-    duration?: string;
+    duration?: string; // Đã thêm logic để map từ backend vào đây
     isCompleted?: boolean;
 };
 
@@ -59,31 +61,26 @@ type WeeklyPlanData = {
 export default function CalendarScreen() {
   const router = useRouter();
 
-//   LẤY USER_ID TỪ ASYNC STORAGE ---
- const [user, setUser] = useState<any | null>(null);
+  // LẤY USER_ID TỪ ASYNC STORAGE ---
+  const [user, setUser] = useState<any | null>(null);
 
-useEffect(() => {
-  (async () => {
-    try {
-      const data = await AsyncStorage.getItem("user_info");
-      setUser(data ? JSON.parse(data) : null);
-    } catch (e) {
-      console.warn("Failed to load user:", e);
-    }
-  })();
-}, []);
- console.log("Current User:", user);
+  useEffect(() => {
+    (async () => {
+      try {
+        const data = await AsyncStorage.getItem("user_info");
+        setUser(data ? JSON.parse(data) : null);
+      } catch (e) {
+        console.warn("Failed to load user:", e);
+      }
+    })();
+  }, []);
  
-
-  
   // STATE DATA
- 
-
   const [planId, setPlanId] = useState<number | null>(null);
   const [weekData, setWeekData] = useState<WeeklyPlanData>({});
   const [startDate, setStartDate] = useState<Date | null>(null);
   const [loading, setLoading] = useState(true);
-
+ 
   // STATE UI
   const [selectedDayIndex, setSelectedDayIndex] = useState(0); 
   const [showSidebar, setShowSidebar] = useState(false);
@@ -100,13 +97,10 @@ useEffect(() => {
   );
 
   const fetchCurrentPlan = async () => {
-   
       try {
-          // Backend GET đã được sửa để merge dữ liệu từ bảng tracking vào JSON
           const response = await fetch(`${API_URL}/api/plan/current?user_id=${user.id}`);
           const data = await response.json();
         
-          
           if (data && data.plan_id) {
               setPlanId(data.plan_id);
               
@@ -116,7 +110,6 @@ useEffect(() => {
                   
                   // Auto-select today
                   const today = new Date();
-                  // Reset giờ để so sánh ngày chính xác
                   today.setHours(0,0,0,0);
                   const startCheck = new Date(start);
                   startCheck.setHours(0,0,0,0);
@@ -125,23 +118,51 @@ useEffect(() => {
                   const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24)); 
                   
                   if (diffDays >= 0 && diffDays <= 6) {
-                     setSelectedDayIndex(diffDays);
+                      setSelectedDayIndex(diffDays);
                   }
               }
 
               const { plan_id, start_date, end_date, ...realPlanData } = data;
-              setWeekData(realPlanData);
-          }
+              
+              // 🔥 [FIX] MAP DỮ LIỆU: duration_min -> duration
+              const processedData: WeeklyPlanData = {};
+              Object.keys(realPlanData).forEach(day => {
+                  if (Array.isArray(realPlanData[day])) {
+                      processedData[day] = realPlanData[day].map((item: any) => ({
+                          ...item,
+                          // Nếu Backend trả về duration_min thì format lại
+                          duration: item.duration_min ? `${item.duration_min} phút` : item.duration
+                      }));
+                  } else {
+                      processedData[day] = [];
+                  }
+              });
+
+              setWeekData(processedData);
+            }
+
+            // Lấy Target Analysis
+            const token = await AsyncStorage.getItem("auth_token");
+            if (token) {
+              const analysisRes = await axios.get(`${API_URL}/analysis/`, {
+                headers: { Authorization: `Bearer ${token}` },
+              });
+              const latest = analysisRes.data?.metrics?.[0];
+              if (latest) {
+                DAILY_GOALS.burn = latest.daily_burn ?? 500;
+                DAILY_GOALS.intake = latest.daily_calo ?? 2000;
+              }
+            }     
       } catch (error) {
           console.error("Lỗi lấy lịch:", error);
-          Alert.alert("Lỗi", "Không thể kết nối đến server.");
+          // Alert.alert("Lỗi", "Không thể kết nối đến server."); 
       } finally {
           setLoading(false);
       }
   };
 
   // --- 2. CẬP NHẬT TRẠNG THÁI (TRACKING API MỚI) ---
- const toggleComplete = async (item: Activity) => {
+  const toggleComplete = async (item: Activity) => {
       if (!planId || !startDate) return;
 
       const targetDate = new Date(startDate);
@@ -150,11 +171,10 @@ useEffect(() => {
       const dbItemType = item.type === 'meal' ? 'food' : 'exercise';
       const newStatus = !item.isCompleted;
 
-      // Update Local State ... (Giữ nguyên)
+      // Update Local State
       const currentDayKey = DAY_KEYS[selectedDayIndex];
       const updatedWeekData = { ...weekData };
       const updatedDayList = updatedWeekData[currentDayKey].map(i => {
-          // So sánh cả instanceId để đảm bảo đúng item (nếu có 2 món giống nhau)
           if (i.instanceId === item.instanceId) { 
               return { ...i, isCompleted: newStatus };
           }
@@ -175,7 +195,7 @@ useEffect(() => {
                   item_type: dbItemType,
                   item_id: item.id,
                   is_completed: newStatus ? 1 : 0,
-                  instance_id: item.instanceId // <--- THÊM DÒNG NÀY QUAN TRỌNG
+                  instance_id: item.instanceId 
               })
           });
       } catch (error) {
@@ -241,7 +261,12 @@ useEffect(() => {
         >
             <View style={styles.timeCol}>
                 <Text style={styles.timeText}>{item.time}</Text>
-                {isWorkout && item.duration && <Text style={styles.durationText}>{item.duration}</Text>}
+                {/* 🔥 HIỂN THỊ DURATION NẾU CÓ */}
+                {isWorkout && item.duration && (
+                    <Text style={[styles.durationText, {color: colors.textLight}]}>
+                        ⏱ {item.duration}
+                    </Text>
+                )}
             </View>
 
             <View style={[styles.vLine, { backgroundColor: themeColor }]} />
@@ -511,7 +536,7 @@ const styles = StyleSheet.create({
   cardDone: { opacity: 0.6, backgroundColor: '#FAFAFA' },
   timeCol: { width: 50, alignItems: 'center', marginRight: 10 },
   timeText: { fontSize: 14, fontWeight: 'bold', color: colors.text },
-  durationText: { fontSize: 10, color: colors.textLight, marginTop: 2 },
+  durationText: { fontSize: 10, marginTop: 4, fontWeight: '500' },
   vLine: { width: 3, height: '80%', borderRadius: 2, marginRight: 12 },
   cardContent: { flex: 1 },
   cardTitle: { fontSize: 15, fontWeight: '600', color: colors.text, marginBottom: 4 },

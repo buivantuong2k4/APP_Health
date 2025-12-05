@@ -1,6 +1,7 @@
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import axios from "axios";
+import { API_BASE_URL } from "../config/api";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
 import {
@@ -88,7 +89,7 @@ export default function ActivityLevelScreen() {
       if (!token) throw new Error("Token không tồn tại");
 
       const response = await axios.post(
-       "http://10.0.2.2:8000/analysis/add_metric/",
+       `${API_BASE_URL}/analysis/add_metric/`,
         finalPayload,
         {
           headers: {

@@ -3,6 +3,7 @@ import axios from "axios"; // <-- import axios
 import { useRouter } from "expo-router";
 import * as SecureStore from "expo-secure-store"; // <-- import SecureStore
 import { useState } from "react";
+import { API_BASE_URL } from "../config/api";
 import {
   Platform,
   ScrollView,
@@ -30,7 +31,7 @@ export default function LoginScreen() {
 
     setLoading(true);
 
-    const API_URL = "http://10.0.2.2:8000/accounts/login/"; // <-- dùng IP mạng, không phải localhost khi chạy trên mobile/web
+    const API_URL = API_BASE_URL+"/accounts/login/"; // <-- dùng IP mạng, không phải localhost khi chạy trên mobile/web
 
     try {
       // gọi POST tới Django API

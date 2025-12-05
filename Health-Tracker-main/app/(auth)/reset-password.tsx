@@ -1,5 +1,6 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
+import { API_BASE_URL } from "../config/api";
 import {
   Alert,
   SafeAreaView,
@@ -34,7 +35,7 @@ export default function ResetPasswordScreen() {
 
     setLoading(true);
     try {
-      const res = await fetch("http://10.0.2.2:8000/accounts/reset_password/", {
+      const res = await fetch(`${API_BASE_URL}/accounts/reset_password/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

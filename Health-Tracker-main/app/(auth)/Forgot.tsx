@@ -12,6 +12,7 @@ import {
 import LoginInput from "../../components/LoginInput";
 import PrimaryButton from "../../components/PrimaryButton";
 import { authScreenStyles as styles } from "../../constants/authScreenStyles";
+import { API_BASE_URL } from "../config/api";
 
 export default function ForgotPasswordScreen() {
   const router = useRouter();
@@ -27,7 +28,7 @@ export default function ForgotPasswordScreen() {
     setLoading(true);
     try {
       const res = await fetch(
-        "http://10.0.2.2:8000/accounts/forgot_password/", // dùng IP LAN cho thiết bị thật
+        `${API_BASE_URL}/accounts/forgot_password/`, // dùng IP LAN cho thiết bị thật
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },

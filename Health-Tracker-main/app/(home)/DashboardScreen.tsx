@@ -3,6 +3,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import axios from "axios";
 import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
+import { API_BASE_URL } from "../config/api";
 import {
   Dimensions,
   SafeAreaView,
@@ -53,7 +54,7 @@ export default function DashboardScreen() {
 
         // 2. Gọi đúng API Django: get_analysis_by_user
         // Backend trả: { user: string, today: string, metrics: [...] }
-        const res = await axios.get("http://10.0.2.2:8000/analysis/", {
+        const res = await axios.get(`${API_BASE_URL}/analysis/`, {
           headers: { Authorization: `Bearer ${token}` },
         });
 

@@ -1,6 +1,7 @@
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import axios from "axios";
+import { API_BASE_URL } from "../config/api";
 import { useRouter } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -157,7 +158,7 @@ export default function HealthProfileScreen() {
         const token = await AsyncStorage.getItem("auth_token");
         if (!token) return;
 
-        const res = await axios.get("http://10.0.2.2:8000/analysis/", {
+        const res = await axios.get(`${API_BASE_URL}/analysis/`, {
           headers: { Authorization: `Bearer ${token}` },
         });
 
@@ -199,7 +200,7 @@ export default function HealthProfileScreen() {
         if (!token) return;
 
         const res = await axios.get(
-          "http://10.0.2.2:8000/accounts/user_profile/",
+          `${API_BASE_URL}/accounts/user_profile/`,
           { headers: { Authorization: `Bearer ${token}` } }
         );
 
@@ -377,7 +378,7 @@ export default function HealthProfileScreen() {
 
       // 1️⃣ UPDATE METRIC
       const res = await axios.put(
-        `http://10.0.2.2:8000/analysis/update/${profile.metricId}/`,
+        `${API_BASE_URL}/analysis/update/${profile.metricId}/`,
         payload,
         { headers: { Authorization: `Bearer ${token}` } }
       );
@@ -403,7 +404,7 @@ export default function HealthProfileScreen() {
 
       // 2️⃣ UPDATE USER PROFILE
       await axios.put(
-        "http://10.0.2.2:8000/accounts/update_user_profile/",
+        `${API_BASE_URL}/accounts/update_user_profile/`,
         {
           dob: ageToDOB(user.age),
           gender: user.gender,
